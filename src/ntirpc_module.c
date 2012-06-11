@@ -151,6 +151,8 @@ struct ntirpc_ops
     int (*getnetname)(char name[MAXNETNAMELEN+1]);
     int (*user2netname)(char netname[MAXNETNAMELEN + 1], const uid_t, const char *);
 
+/*
+
 netnamer.c
 ntirpc_module.c
 pmap_clnt.c

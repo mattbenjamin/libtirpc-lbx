@@ -1352,7 +1352,7 @@ svc_vc_create_from_clnt(CLIENT *cl,
     if ((flags & SVC_VC_CREATE_FLAG_SPLX) &&
         (flags & SVC_VC_CREATE_FLAG_DISPOSE)) {
 	ct->ct_closeit = FALSE; /* must not close */	
-	CLNT_DESTROY(cl); /* clean up immediately */
+	clnt_vc_destroy(cl); /* clean up immediately */
     }
 
 unlock:
