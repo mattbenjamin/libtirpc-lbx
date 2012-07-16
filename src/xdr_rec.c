@@ -75,6 +75,10 @@ static u_int xdrrec_getpos(XDR *);
 static bool xdrrec_setpos(XDR *, u_int);
 static int32_t *xdrrec_inline(XDR *, u_int);
 static void xdrrec_destroy(XDR *);
+static bool xdrrec_noop(void);
+
+typedef bool (* dummyfunc3)(XDR *, int, void *);
+typedef bool (* dummyfunc4)(XDR *, const char *, u_int, u_int);
 
 static const struct  xdr_ops xdrrec_ops = {
     xdrrec_getlong,
@@ -85,8 +89,9 @@ static const struct  xdr_ops xdrrec_ops = {
     xdrrec_setpos,
     xdrrec_inline,
     xdrrec_destroy,
-    NULL, /* getbytes2 */
-    NULL  /* putbytes2 */
+    (dummyfunc3) xdrrec_noop, /* x_control */
+    (dummyfunc4) xdrrec_noop, /* x_getbytes2 */
+    (dummyfunc4) xdrrec_noop  /* x_putbytes2 */
 };
 
 /*
@@ -746,4 +751,10 @@ realloc_stream(RECSTREAM *rstrm, int size)
     }
 
     return TRUE;
+}
+
+static bool
+xdrrec_noop(void)
+{
+    return (FALSE);
 }

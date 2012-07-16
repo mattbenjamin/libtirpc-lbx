@@ -92,8 +92,19 @@ enum xdr_op {
  * This is the number of bytes per unit of external data.
  */
 #define BYTES_PER_XDR_UNIT (4)
+/* Taken verbatim from a system xdr.h, which carries a BSD-style
+ * license (Matt) */
+/*
+ * This only works if the above is a power of 2.  But it's defined to be
+ * 4 by the appropriate RFCs.  So it will work.  And it's normally quicker
+ * than the old routine.
+ */
+#if 1
+#define RNDUP(x)  (((x) + BYTES_PER_XDR_UNIT - 1) & ~(BYTES_PER_XDR_UNIT - 1))
+#else /* this is the old routine */
 #define RNDUP(x)  ((((x) + BYTES_PER_XDR_UNIT - 1) / BYTES_PER_XDR_UNIT) \
-                   * BYTES_PER_XDR_UNIT)
+		    * BYTES_PER_XDR_UNIT)
+#endif
 
 /*
  * The XDR handle.
@@ -349,15 +360,15 @@ extern bool   xdr_netobj(XDR *, struct netobj *);
  */
 __BEGIN_DECLS
 /* XDR using memory buffers */
-extern void   xdrmem_create(XDR *, char *, u_int, enum xdr_op);
+extern void xdrmem_create(XDR *, char *, u_int, enum xdr_op);
 
 /* XDR using stdio library */
-extern void   xdrstdio_create(XDR *, FILE *, enum xdr_op);
+extern void xdrstdio_create(XDR *, FILE *, enum xdr_op);
 
 /* XDR pseudo records for tcp */
-extern void   xdrrec_create(XDR *, u_int, u_int, void *,
-                            int (*)(void *, void *, int),
-                            int (*)(void *, void *, int));
+extern void xdrrec_create(XDR *, u_int, u_int, void *,
+                          int (*)(void *, void *, int),
+                          int (*)(void *, void *, int));
 
 /* make end of xdr record */
 extern bool xdrrec_endofrecord(XDR *, bool);
@@ -367,7 +378,20 @@ extern bool xdrrec_skiprecord(XDR *);
 
 /* true if no more input */
 extern bool xdrrec_eof(XDR *);
-extern u_int xdrrec_readbytes(XDR *, caddr_t, u_int);
+
+/* vector equivalents */
+extern void xdr_vrec_create(XDR *, u_int, u_int, void *,
+                            size_t (*)(void *, struct iovec *, int),
+                            size_t (*)(void *, struct iovec *, int));
+
+/* make end of xdr record */
+extern bool xdr_vrec_endofrecord(XDR *, bool);
+
+/* move to beginning of next record */
+extern bool xdr_vrec_skiprecord(XDR *);
+
+/* true if no more input */
+extern bool xdr_vrec_eof(XDR *);
 __END_DECLS
 
 #endif /* !_TIRPC_XDR_H */
