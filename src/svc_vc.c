@@ -69,6 +69,7 @@
 #include "svc_xprt.h"
 #include "vc_lock.h"
 #include <rpc/svc_rqst.h>
+#include <rpc/xdr_vrec.h>
 
 #include <getpeereid.h>
 
@@ -80,6 +81,10 @@ static void svc_vc_destroy(SVCXPRT *);
 static void __svc_vc_dodestroy (SVCXPRT *);
 static int read_vc(void *, void *, int);
 static int write_vc(void *, void *, int);
+static size_t readv_vc(void *xprtp, struct iovec *iov, int iovcnt,
+                       u_int flags);
+static size_t writev_vc(void *xprtp, struct iovec *iov, int iovcnt,
+                        u_int flags);
 static enum xprt_stat svc_vc_stat(SVCXPRT *);
 static bool svc_vc_recv(SVCXPRT *, struct rpc_msg *);
 static bool svc_vc_getargs(SVCXPRT *, xdrproc_t, void *);
@@ -406,7 +411,7 @@ freedata:
 }
 
 SVCXPRT *
-makefd_xprt(int fd, u_int sendsize, u_int recvsize)
+makefd_xprt(int fd, u_int sendsz, u_int recvsz)
 {
     SVCXPRT *xprt;
     struct cf_conn *cd;
@@ -442,8 +447,16 @@ makefd_xprt(int fd, u_int sendsize, u_int recvsize)
         goto done;
     }
     cd->strm_stat = XPRT_IDLE;
-    xdrrec_create(&(cd->xdrs), sendsize, recvsize,
-                  xprt, read_vc, write_vc);
+
+    /* parallel send/recv */
+    xdr_vrec_create(&(cd->xdrs_in),
+                    XDR_VREC_IN, xprt, readv_vc, NULL, recvsz,
+                    VREC_FLAG_NONE);
+
+    xdr_vrec_create(&(cd->xdrs_out),
+                    XDR_VREC_OUT, xprt, NULL, writev_vc, sendsz,
+                    VREC_FLAG_NONE);
+
     xprt->xp_p1 = cd;
     xprt->xp_auth = NULL;
     xprt->xp_verf.oa_base = cd->verf_body;
@@ -468,7 +481,7 @@ done:
 static bool
 rendezvous_request(SVCXPRT *xprt, struct rpc_msg *msg)
 {
-    int sock, flags;
+    int sock;
     struct cf_rendezvous *r;
     struct cf_conn *cd;
     struct sockaddr_storage addr;
@@ -509,7 +522,7 @@ again:
         return (FALSE);
     }
     /*
-     * make a new transporter (re-uses xprt)
+     * make a new transport (re-uses xprt)
      */
     newxprt = makefd_xprt(sock, r->sendsize, r->recvsize);
     if (! newxprt)
@@ -530,9 +543,9 @@ again:
 
     __xprt_set_raddr(newxprt, &addr);
 
+    /* XXX fvdl - is this useful? (Yes.  Matt) */
     if (__rpc_fd2sockinfo(sock, &si) && si.si_proto == IPPROTO_TCP) {
         len = 1;
-        /* XXX fvdl - is this useful? */
         setsockopt(sock, IPPROTO_TCP, TCP_NODELAY, &len, sizeof (len));
     }
 
@@ -542,6 +555,7 @@ again:
     cd->sendsize = r->sendsize;
     cd->maxrec = r->maxrec;
 
+#if 0 /* XXX vrec wont support atm (and it needs serious work anyway) */
     if (cd->maxrec != 0) {
         flags = fcntl(sock, F_GETFL, 0);
         if (flags  == -1)
@@ -554,6 +568,9 @@ again:
         __xdrrec_setnonblock(&cd->xdrs, cd->maxrec);
     } else
         cd->nonblock = FALSE;
+#else
+    cd->nonblock = FALSE;
+#endif
 
     gettimeofday(&cd->last_recv_time, NULL);
 
@@ -601,7 +618,8 @@ __svc_vc_dodestroy(SVCXPRT *xprt)
         xprt->xp_port = 0;
     } else {
         /* an actual connection socket */
-        XDR_DESTROY(&(cd->xdrs));
+        XDR_DESTROY(&(cd->xdrs_in));
+        XDR_DESTROY(&(cd->xdrs_out));
         mem_free(cd, sizeof(struct cf_conn));
     }
     if (xprt->xp_auth != NULL) {
@@ -612,10 +630,8 @@ __svc_vc_dodestroy(SVCXPRT *xprt)
         mem_free(xprt->xp_rtaddr.buf, xprt->xp_rtaddr.maxlen);
     if (xprt->xp_ltaddr.buf)
         mem_free(xprt->xp_ltaddr.buf, xprt->xp_ltaddr.maxlen);
-
     if (xprt->xp_tp)
         mem_free(xprt->xp_tp, 0);
-
     if (xprt->xp_netid)
         mem_free(xprt->xp_netid, 0);
 
@@ -875,6 +891,99 @@ write_vc(void *xprtp, void *buf, int len)
     return (len);
 }
 
+/* vector versions */
+
+/*
+ * reads data from the tcp or udp connection.
+ * any error is fatal and the connection is closed.
+ * (And a read of zero bytes is a half closed stream => error.)
+ * All read operations timeout after 35 seconds.  A timeout is
+ * fatal for the connection.
+ */
+static size_t
+readv_vc(void *xprtp, struct iovec *iov, int iovcnt, u_int flags)
+{
+    SVCXPRT *xprt;
+    int milliseconds = 35 * 1000; /* XXX shouldn't this be configurable? */
+    struct pollfd pollfd;
+    struct cf_conn *cd;
+    size_t nbytes = -1;
+    bool reblock = FALSE;
+    int fflags;
+
+    xprt = (SVCXPRT *)xprtp;
+    assert(xprt != NULL);
+
+    cd = (struct cf_conn *)xprt->xp_p1;
+
+    /* support readahead */
+    if (flags & VREC_FLAG_NONBLOCK) {
+        if (! cd->nonblock) {
+            fflags = fcntl(xprt->xp_fd, F_GETFL, 0);
+            if (fflags == -1)
+                goto fatal_err;
+            if (fcntl(xprt->xp_fd, F_SETFL, fflags | O_NONBLOCK) == -1)
+                goto fatal_err;
+            reblock = TRUE;
+        }
+    }
+
+    do {
+        pollfd.fd = xprt->xp_fd;
+        pollfd.events = POLLIN;
+        pollfd.revents = 0;
+        switch (poll(&pollfd, 1, milliseconds)) {
+        case -1:
+            if (errno == EINTR)
+                continue;
+            /*FALLTHROUGH*/
+        case 0:
+            goto fatal_err;
+        default:
+            break;
+        }
+    } while ((pollfd.revents & POLLIN) == 0);
+
+    if ((nbytes = readv(xprt->xp_fd, iov, iovcnt)) > 0) {
+        gettimeofday(&cd->last_recv_time, NULL);
+        goto out;
+    }
+
+fatal_err:
+    ((struct cf_conn *)(xprt->xp_p1))->strm_stat = XPRT_DIED;
+out:
+    if(reblock) {
+        (void) fcntl(xprt->xp_fd, F_SETFL, fflags & ~O_NONBLOCK);
+    }
+
+    return (nbytes);
+}
+
+/*
+ * writes data to the tcp connection.
+ * Any error is fatal and the connection is closed.
+ */
+static size_t
+writev_vc(void *xprtp, struct iovec *iov, int iovcnt, u_int flags)
+{
+    SVCXPRT *xprt;
+    struct cf_conn *cd;
+    size_t nbytes;
+
+    xprt = (SVCXPRT *)xprtp;
+    assert(xprt != NULL);
+
+    cd = (struct cf_conn *)xprt->xp_p1;
+
+    nbytes = writev(xprt->xp_fd, iov, iovcnt);
+    if (nbytes  < 0) {
+        cd->strm_stat = XPRT_DIED;
+        return (-1);
+    }
+
+    return (nbytes);
+}
+
 static enum xprt_stat
 svc_vc_stat(SVCXPRT *xprt)
 {
@@ -886,8 +995,11 @@ svc_vc_stat(SVCXPRT *xprt)
 
     if (cd->strm_stat == XPRT_DIED)
         return (XPRT_DIED);
-    if (! xdrrec_eof(&(cd->xdrs)))
+
+    /* SVC_STAT() only cares about the recv queue */
+    if (! xdr_vrec_eof(&(cd->xdrs_in)))
         return (XPRT_MOREREQS);
+
     return (XPRT_IDLE);
 }
 
@@ -901,24 +1013,29 @@ svc_vc_recv(SVCXPRT *xprt, struct rpc_msg *msg)
     assert(msg != NULL);
 
     cd = (struct cf_conn *)(xprt->xp_p1);
-    xdrs = &(cd->xdrs);
 
+    xdrs = &(cd->xdrs_in); /* recv queue */
+
+    /* XXX assert(!cd->nonblock) */
     if (cd->nonblock) {
         if (!__xdrrec_getrec(xdrs, &cd->strm_stat, TRUE))
             return FALSE;
     }
 
     xdrs->x_op = XDR_DECODE;
+
     /*
      * No need skip records with nonblocking connections
      */
     if (cd->nonblock == FALSE)
-        (void)xdrrec_skiprecord(xdrs);
+        (void) xdr_vrec_skiprecord(xdrs);
+
     if (xdr_dplx_msg(xdrs, msg)) {
         /* XXX actually using cd->x_id !MT-SAFE */
         cd->x_id = msg->rm_xid;
         return (TRUE);
     }
+
     cd->strm_stat = XPRT_DIED;
     return (FALSE);
 }
@@ -931,11 +1048,12 @@ svc_vc_getargs(SVCXPRT *xprt, xdrproc_t xdr_args, void *args_ptr)
     assert(xprt != NULL);
     /* args_ptr may be NULL */
 
-    /* XXXX TODO: duplex unification (xdrs)  */
+    /* XXXX TODO: bidirectional unification */
 
     if (! SVCAUTH_UNWRAP(xprt->xp_auth,
-                         &(((struct cf_conn *)(xprt->xp_p1))->xdrs),
+                         &(((struct cf_conn *)(xprt->xp_p1))->xdrs_in),
                          xdr_args, args_ptr)) {
+#if 0 /* XXX bidrectional unification (there will be only one queue pair) */
         CLIENT *cl;
         cl = (CLIENT *) xprt->xp_p4;
         if (cl) {
@@ -949,6 +1067,7 @@ svc_vc_getargs(SVCXPRT *xprt, xdrproc_t xdr_args, void *args_ptr)
                 }
             }
         }
+#endif /* 0 */
         rslt = FALSE;
     }
 
@@ -966,7 +1085,7 @@ svc_vc_getargs2(SVCXPRT *xprt, xdrproc_t xdr_args, void *args_ptr,
 {
     bool rslt = TRUE;
     struct cf_conn *cd = (struct cf_conn *) xprt->xp_p1;
-    XDR *xdrs = &cd->xdrs;
+    XDR *xdrs = &cd->xdrs_in; /* recv queue */
 
     /* threads u_data for advanced decoders*/
     xdrs->x_public = u_data;
@@ -974,8 +1093,9 @@ svc_vc_getargs2(SVCXPRT *xprt, xdrproc_t xdr_args, void *args_ptr,
     /* XXX TODO: duplex unification (xdrs)  */
 
     if (! SVCAUTH_UNWRAP(xprt->xp_auth,
-                         &(((struct cf_conn *)(xprt->xp_p1))->xdrs),
+                         &(((struct cf_conn *)(xprt->xp_p1))->xdrs_in),
                          xdr_args, args_ptr)) {
+#if 0 /* XXX bidrectional unification (there will be only one queue pair) */
         CLIENT *cl;
         cl = (CLIENT *) xprt->xp_p4;
         if (cl) {
@@ -989,6 +1109,7 @@ svc_vc_getargs2(SVCXPRT *xprt, xdrproc_t xdr_args, void *args_ptr,
                 }
             }
         }
+#endif /* 0 */
         rslt = FALSE;
     }
 
@@ -1008,7 +1129,7 @@ svc_vc_freeargs(SVCXPRT *xprt, xdrproc_t xdr_args, void *args_ptr)
     assert(xprt != NULL);
     /* args_ptr may be NULL */
 
-    xdrs = &(((struct cf_conn *)(xprt->xp_p1))->xdrs);
+    xdrs = &(((struct cf_conn *)(xprt->xp_p1))->xdrs_in);
 
     xdrs->x_op = XDR_FREE;
     return ((*xdr_args)(xdrs, args_ptr));
@@ -1031,7 +1152,7 @@ svc_vc_reply(SVCXPRT *xprt, struct rpc_msg *msg)
     assert(msg != NULL);
 
     cd = (struct cf_conn *)(xprt->xp_p1);
-    xdrs = &(cd->xdrs);
+    xdrs = &(cd->xdrs_out); /* send queue */
 
 #if 0 /* XXX duplex debugging */
     if (xprt->xp_p4) {
@@ -1063,10 +1184,11 @@ svc_vc_reply(SVCXPRT *xprt, struct rpc_msg *msg)
     rstat = FALSE;
     if (xdr_replymsg(xdrs, msg) &&
         (!has_args || (xprt->xp_auth &&
-                       SVCAUTH_WRAP(xprt->xp_auth, xdrs, xdr_results, xdr_location)))) {
+                       SVCAUTH_WRAP(xprt->xp_auth, xdrs, xdr_results,
+                                    xdr_location)))) {
         rstat = TRUE;
     }
-    (void)xdrrec_endofrecord(xdrs, TRUE);
+    (void)xdr_vrec_endofrecord(xdrs, TRUE);
     return (rstat);
 }
 
@@ -1338,7 +1460,7 @@ svc_vc_create_from_clnt(CLIENT *cl,
                         const uint32_t flags)
 {
 
-    int fd, fflags;
+    int fd;
     socklen_t len;
     struct cf_conn *cd;
     struct cx_data *cx = (struct cx_data *) cl->cl_private;
@@ -1389,6 +1511,7 @@ svc_vc_create_from_clnt(CLIENT *cl,
     cd->recvsize = __rpc_get_t_size(si.si_af, si.si_proto, (int) recvsz);
     cd->maxrec = __svc_maxrec;
 
+#if 0 /* XXX wont currently support */
     if (cd->maxrec != 0) {
         fflags = fcntl(fd, F_GETFL, 0);
         if (fflags  == -1)
@@ -1401,6 +1524,9 @@ svc_vc_create_from_clnt(CLIENT *cl,
         __xdrrec_setnonblock(&cd->xdrs, cd->maxrec);
     } else
         cd->nonblock = FALSE;
+#else
+    cd->nonblock = FALSE;
+#endif
 
     gettimeofday(&cd->last_recv_time, NULL);
 
@@ -1443,7 +1569,9 @@ void svc_vc_destroy_xprt(SVCXPRT * xprt)
 
     svc_rqst_finalize_xprt(xprt);
 
-    XDR_DESTROY(&(cd->xdrs));
+    XDR_DESTROY(&(cd->xdrs_in));
+    XDR_DESTROY(&(cd->xdrs_out));
+
     mem_free(cd, sizeof(struct cf_conn));
     mem_free(xprt, sizeof(SVCXPRT));
 }
@@ -1472,7 +1600,15 @@ SVCXPRT *svc_vc_create_xprt(u_long sendsz, u_long recvsz)
     svc_rqst_init_xprt(xprt);
 
     cd->strm_stat = XPRT_IDLE;
-    xdrrec_create(&(cd->xdrs), sendsz, recvsz, xprt, read_vc, write_vc);
+
+    /* parallel send/recv */
+    xdr_vrec_create(&(cd->xdrs_in),
+                    XDR_VREC_IN, xprt, readv_vc, NULL, recvsz,
+                    VREC_FLAG_NONE);
+
+    xdr_vrec_create(&(cd->xdrs_out),
+                    XDR_VREC_OUT, xprt, NULL, writev_vc, sendsz,
+                    VREC_FLAG_NONE);
 
     xprt->xp_p1 = cd;
     xprt->xp_verf.oa_base = cd->verf_body;
