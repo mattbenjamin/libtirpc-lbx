@@ -65,6 +65,7 @@
 #include <rpc/svc.h>
 #include <rpc/clnt.h>
 #include <stddef.h>
+#include <intrinsic.h>
 #include "rpc_com.h"
 
 #include <rpc/xdr_vrec.h>
@@ -81,6 +82,9 @@ static int32_t *xdr_vrec_inline(XDR *, u_int);
 static void xdr_vrec_destroy(XDR *);
 static bool xdr_vrec_noop(void);
 
+typedef bool (* dummyfunc3)(XDR *, int, void *);
+typedef bool (* dummyfunc4)(XDR *, const char *, u_int, u_int);
+
 static const struct  xdr_ops xdr_vrec_ops = {
     xdr_vrec_getlong,
     xdr_vrec_putlong,
@@ -90,7 +94,7 @@ static const struct  xdr_ops xdr_vrec_ops = {
     xdr_vrec_setpos,
     xdr_vrec_inline,
     xdr_vrec_destroy,
-    xdr_vrec_noop, /* x_control */
+    (dummyfunc3) xdr_vrec_noop, /* x_control */
     xdr_vrec_getbytes2,
     xdr_vrec_putbytes2
 };
@@ -117,11 +121,46 @@ static bool get_input_bytes(V_RECSTREAM *, char *, int);
 static bool set_input_fragment(V_RECSTREAM *);
 static bool skip_input_bytes(V_RECSTREAM *, long);
 
-/* Preallocate memory */
-struct {
-    struct opr_queue v_req_q;
-    struct opr_queue v_req_buf_q;
-};
+/* XXX might not be faster than jemalloc, &c? */
+static inline void
+init_prealloc_queues(V_RECSTREAM *vrstrm)
+{
+    int ix;
+    struct v_rec *vrec;
+
+    opr_queue_Init(&vrstrm->prealloc.v_req.q);
+    vrstrm->prealloc.v_req.size = 0;
+
+    opr_queue_Init(&vrstrm->prealloc.v_req_buf.q);
+    vrstrm->prealloc.v_req_buf.size = 0;
+
+    for (ix = 0; ix < VQSIZE; ++ix) {
+        vrec = mem_alloc(sizeof(struct v_rec));
+        opr_queue_Append(&vrstrm->prealloc.v_req.q, &vrec->q);
+        (vrstrm->prealloc.v_req.size)++;
+    }
+}
+
+static inline struct v_rec *
+vrec_get_vrec(V_RECSTREAM *vrstrm)
+{
+    struct v_rec *vrec =
+        opr_queue_First(&vrstrm->prealloc.v_req.q, struct v_rec, q);
+    if (unlikely(! vrec)) {
+        vrec = mem_alloc(sizeof(struct v_rec));
+    } else {
+        opr_queue_Remove(&vrec->q);
+        (vrstrm->prealloc.v_req.size)--;
+    }
+    return (vrec);
+}
+
+static inline void
+vrec_put_vrec(V_RECSTREAM *vrstrm, struct v_rec *vrec)
+{
+    opr_queue_Append(&vrstrm->prealloc.v_req.q, &vrec->q);
+    (vrstrm->prealloc.v_req.size)++;
+}
 
 /*
  * Create an xdr handle for xdrrec
@@ -154,6 +193,8 @@ xdr_vrec_create(XDR *xdrs,
         return;
     }
 
+    init_prealloc_queues(vrstrm);
+
     /*
      * now the rest ...
      */
@@ -163,7 +204,8 @@ xdr_vrec_create(XDR *xdrs,
     vrstrm->readv = xreadv;
     vrstrm->writev = xwritev;
 
-    vrstrm->out_q.len = 0;
+    opr_queue_Init(&vrstrm->out_q);
+
     /* XXX */
     vrstrm->out_finger = vrstrm->out_boundry = vrstrm->out_base;
     vrstrm->frag_header = (u_int32_t *)(void *)vrstrm->out_base;
@@ -171,7 +213,8 @@ xdr_vrec_create(XDR *xdrs,
     vrstrm->out_boundry += sendsize;
     vrstrm->frag_sent = FALSE;
 
-    vrstrm->in_q.len = 0;
+    opr_queue_Init(&vrstrm->in_q);
+
     vrstrm->in_size = recvsize;
     /* XXX */
     vrstrm->in_boundry = vrstrm->in_base;
@@ -549,6 +592,9 @@ xdr_vrec_destroy(XDR *xdrs)
 bool
 xdr_vrec_skiprecord(XDR *xdrs)
 {
+    V_RECSTREAM *vrstrm = (V_RECSTREAM *)(xdrs->x_private);
+    enum xprt_stat xstat;
+
 #if 0 /* XXX */
     RECSTREAM *rstrm = (RECSTREAM *)(xdrs->x_private);
     enum xprt_stat xstat;

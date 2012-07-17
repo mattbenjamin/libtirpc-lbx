@@ -38,7 +38,6 @@ struct v_rec
     u_int len;
     u_int flags;
 };
-typedef struct v_rec v_rec_t;
 
 #define VQBUFSZ 16384
 struct v_rec_buf
@@ -47,6 +46,7 @@ struct v_rec_buf
     void *buf;
 };
 
+/* XXX deleteme */
 #define VQSIZE 64
 struct v_q
 {
@@ -54,16 +54,31 @@ struct v_q
     int len; /* slots in use */
 };
 
+struct opr_queue_ex
+{
+    struct opr_queue q;
+    int32_t size;
+};
+
+/* Preallocate memory */
+struct vrec_prealloc
+{
+    struct opr_queue_ex v_req;
+    struct opr_queue_ex v_req_buf;
+};
+
 struct v_rec_strm
 {
     void *tcp_handle; /* XXX generalize? */
+
+    struct vrec_prealloc prealloc;
 
     /*
      * out-going bits
      */
     size_t (*writev)(void *, struct iovec *, int);
 
-    struct v_q out_q;
+    struct opr_queue out_q;
 
     char *out_base; /* output buffer (points to frag header) */
     char *out_finger; /* next output position */
@@ -76,7 +91,7 @@ struct v_rec_strm
      */
     size_t (*readv)(void *, struct iovec *, int);
 
-    struct v_q in_q;
+    struct opr_queue in_q;
 
     u_long in_size; /* fixed size of the input buffer */
     char *in_base;

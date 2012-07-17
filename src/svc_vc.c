@@ -444,13 +444,10 @@ makefd_xprt(int fd, u_int sendsize, u_int recvsize)
         goto done;
     }
     cd->strm_stat = XPRT_IDLE;
-#if 0
-    xdrrec_create(&(cd->xdrs), sendsize, recvsize, xprt,
-                  read_vc, write_vc);
-#else
+
     xdr_vrec_create(&(cd->xdrs), sendsize, recvsize, xprt,
                     readv_vc, writev_vc);
-#endif
+
     xprt->xp_p1 = cd;
     xprt->xp_auth = NULL;
     xprt->xp_verf.oa_base = cd->verf_body;
@@ -475,7 +472,7 @@ done:
 static bool
 rendezvous_request(SVCXPRT *xprt, struct rpc_msg *msg)
 {
-    int sock, flags;
+    int sock;
     struct cf_rendezvous *r;
     struct cf_conn *cd;
     struct sockaddr_storage addr;
@@ -549,6 +546,7 @@ again:
     cd->sendsize = r->sendsize;
     cd->maxrec = r->maxrec;
 
+#if 0 /* XXX vrec wont support atm (and it needs serious work anyway) */
     if (cd->maxrec != 0) {
         flags = fcntl(sock, F_GETFL, 0);
         if (flags  == -1)
@@ -561,6 +559,9 @@ again:
         __xdrrec_setnonblock(&cd->xdrs, cd->maxrec);
     } else
         cd->nonblock = FALSE;
+#else
+    cd->nonblock = FALSE;
+#endif
 
     gettimeofday(&cd->last_recv_time, NULL);
 
@@ -971,7 +972,7 @@ svc_vc_stat(SVCXPRT *xprt)
 
     if (cd->strm_stat == XPRT_DIED)
         return (XPRT_DIED);
-    if (! xdrrec_eof(&(cd->xdrs)))
+    if (! xdr_vrec_eof(&(cd->xdrs)))
         return (XPRT_MOREREQS);
     return (XPRT_IDLE);
 }
@@ -988,17 +989,20 @@ svc_vc_recv(SVCXPRT *xprt, struct rpc_msg *msg)
     cd = (struct cf_conn *)(xprt->xp_p1);
     xdrs = &(cd->xdrs);
 
+    /* XXX currently, must be FALSE */
+#if 0
     if (cd->nonblock) {
         if (!__xdrrec_getrec(xdrs, &cd->strm_stat, TRUE))
             return FALSE;
     }
+#endif
 
     xdrs->x_op = XDR_DECODE;
     /*
      * No need skip records with nonblocking connections
      */
     if (cd->nonblock == FALSE)
-        (void)xdrrec_skiprecord(xdrs);
+        (void)xdr_vrec_skiprecord(xdrs);
     if (xdr_dplx_msg(xdrs, msg)) {
         /* XXX actually using cd->x_id !MT-SAFE */
         cd->x_id = msg->rm_xid;
@@ -1148,10 +1152,11 @@ svc_vc_reply(SVCXPRT *xprt, struct rpc_msg *msg)
     rstat = FALSE;
     if (xdr_replymsg(xdrs, msg) &&
         (!has_args || (xprt->xp_auth &&
-                       SVCAUTH_WRAP(xprt->xp_auth, xdrs, xdr_results, xdr_location)))) {
+                       SVCAUTH_WRAP(xprt->xp_auth, xdrs, xdr_results,
+                                    xdr_location)))) {
         rstat = TRUE;
     }
-    (void)xdrrec_endofrecord(xdrs, TRUE);
+    (void)xdr_vrec_endofrecord(xdrs, TRUE);
     return (rstat);
 }
 
@@ -1423,7 +1428,7 @@ svc_vc_create_from_clnt(CLIENT *cl,
                         const uint32_t flags)
 {
 
-    int fd, fflags;
+    int fd;
     socklen_t len;
     struct cf_conn *cd;
     struct cx_data *cx = (struct cx_data *) cl->cl_private;
@@ -1474,6 +1479,7 @@ svc_vc_create_from_clnt(CLIENT *cl,
     cd->recvsize = __rpc_get_t_size(si.si_af, si.si_proto, (int) recvsz);
     cd->maxrec = __svc_maxrec;
 
+#if 0 /* XXX wont currently support */
     if (cd->maxrec != 0) {
         fflags = fcntl(fd, F_GETFL, 0);
         if (fflags  == -1)
@@ -1486,6 +1492,9 @@ svc_vc_create_from_clnt(CLIENT *cl,
         __xdrrec_setnonblock(&cd->xdrs, cd->maxrec);
     } else
         cd->nonblock = FALSE;
+#else
+    cd->nonblock = FALSE;
+#endif
 
     gettimeofday(&cd->last_recv_time, NULL);
 
@@ -1557,7 +1566,7 @@ SVCXPRT *svc_vc_create_xprt(u_long sendsz, u_long recvsz)
     svc_rqst_init_xprt(xprt);
 
     cd->strm_stat = XPRT_IDLE;
-    xdrrec_create(&(cd->xdrs), sendsz, recvsz, xprt, read_vc, write_vc);
+    xdr_vrec_create(&(cd->xdrs), sendsz, recvsz, xprt, readv_vc, writev_vc);
 
     xprt->xp_p1 = cd;
     xprt->xp_verf.oa_base = cd->verf_body;

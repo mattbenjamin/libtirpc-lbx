@@ -132,7 +132,7 @@ typedef struct __rpc_xdr {
         /* free privates of this xdr_stream */
         void (*x_destroy)(struct __rpc_xdr *);
         bool (*x_control)(struct __rpc_xdr *, int, void *);
-        bool (*x_getbytes2)(struct __rpc_xdr *, const char *, u_int, u_int);
+        bool (*x_getbytes2)(struct __rpc_xdr *, char *, u_int, u_int);
         bool (*x_putbytes2)(struct __rpc_xdr *, const char *, u_int, u_int);
     } *x_ops;
     void *x_public; /* users' data */
