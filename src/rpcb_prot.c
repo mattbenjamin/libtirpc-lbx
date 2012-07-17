@@ -99,14 +99,14 @@ xdr_rpcblist_ptr(xdrs, rp)
      * XDR_ENCODE or XDR_FREE.  more_elements is overwritten by
      * xdr_bool when the direction is XDR_DECODE.
      */
-    bool more_elements;
+    bool_t more_elements;
     int freeing = (xdrs->x_op == XDR_FREE);
     rpcblist_ptr next;
     rpcblist_ptr next_copy;
 
     next = NULL;
     for (;;) {
-        more_elements = (bool)(*rp != NULL);
+        more_elements = (bool_t)(*rp != NULL);
         if (! xdr_bool(xdrs, &more_elements)) {
             return (FALSE);
         }
@@ -188,14 +188,14 @@ xdr_rpcb_entry_list_ptr(xdrs, rp)
      * XDR_ENCODE or XDR_FREE.  more_elements is overwritten by
      * xdr_bool when the direction is XDR_DECODE.
      */
-    bool more_elements;
+    bool_t more_elements;
     int freeing = (xdrs->x_op == XDR_FREE);
     rpcb_entry_list_ptr next;
     rpcb_entry_list_ptr next_copy;
 
     next = NULL;
     for (;;) {
-        more_elements = (bool)(*rp != NULL);
+        more_elements = (bool_t)(*rp != NULL);
         if (! xdr_bool(xdrs, &more_elements)) {
             return (FALSE);
         }
