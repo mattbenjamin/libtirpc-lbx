@@ -614,10 +614,10 @@ __svc_vc_dodestroy(SVCXPRT *xprt)
         mem_free(xprt->xp_ltaddr.buf, xprt->xp_ltaddr.maxlen);
 
     if (xprt->xp_tp)
-        __free(xprt->xp_tp);
+        mem_free(xprt->xp_tp, 0);
 
     if (xprt->xp_netid)
-        __free(xprt->xp_netid);
+        mem_free(xprt->xp_netid, 0);
 
     svc_rqst_finalize_xprt(xprt);
     vc_lock_unref_xprt(xprt);
