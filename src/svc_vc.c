@@ -80,6 +80,8 @@ static void svc_vc_destroy(SVCXPRT *);
 static void __svc_vc_dodestroy (SVCXPRT *);
 static int read_vc(void *, void *, int);
 static int write_vc(void *, void *, int);
+static size_t readv_vc(void *xprtp, struct iovec *iov, int iovcnt);
+static size_t writev_vc(void *xprtp, struct iovec *iov, int iovcnt);
 static enum xprt_stat svc_vc_stat(SVCXPRT *);
 static bool svc_vc_recv(SVCXPRT *, struct rpc_msg *);
 static bool svc_vc_getargs(SVCXPRT *, xdrproc_t, void *);
@@ -442,8 +444,13 @@ makefd_xprt(int fd, u_int sendsize, u_int recvsize)
         goto done;
     }
     cd->strm_stat = XPRT_IDLE;
-    xdrrec_create(&(cd->xdrs), sendsize, recvsize,
-                  xprt, read_vc, write_vc);
+#if 0
+    xdrrec_create(&(cd->xdrs), sendsize, recvsize, xprt,
+                  read_vc, write_vc);
+#else
+    xdr_vrec_create(&(cd->xdrs), sendsize, recvsize, xprt,
+                    readv_vc, writev_vc);
+#endif
     xprt->xp_p1 = cd;
     xprt->xp_auth = NULL;
     xprt->xp_verf.oa_base = cd->verf_body;
@@ -873,6 +880,84 @@ write_vc(void *xprtp, void *buf, int len)
     }
 
     return (len);
+}
+
+/* vector versions */
+
+/*
+ * reads data from the tcp or udp connection.
+ * any error is fatal and the connection is closed.
+ * (And a read of zero bytes is a half closed stream => error.)
+ * All read operations timeout after 35 seconds.  A timeout is
+ * fatal for the connection.
+ */
+static size_t
+readv_vc(void *xprtp, struct iovec *iov, int iovcnt)
+{
+    SVCXPRT *xprt;
+    int milliseconds = 35 * 1000; /* XXX shouldn't this be configurable? */
+    struct pollfd pollfd;
+    struct cf_conn *cd;
+    size_t nbytes = -1;
+
+    xprt = (SVCXPRT *)xprtp;
+    assert(xprt != NULL);
+
+    cd = (struct cf_conn *)xprt->xp_p1;
+
+    /* XXX svc_dplx side of poll -- I think we want to
+     * consider making this hot-threaded as well (Matt) */
+
+    do {
+        pollfd.fd = xprt->xp_fd;
+        pollfd.events = POLLIN;
+        pollfd.revents = 0;
+        switch (poll(&pollfd, 1, milliseconds)) {
+        case -1:
+            if (errno == EINTR)
+                continue;
+            /*FALLTHROUGH*/
+        case 0:
+            goto fatal_err;
+        default:
+            break;
+        }
+    } while ((pollfd.revents & POLLIN) == 0);
+
+    if ((nbytes = readv(xprt->xp_fd, iov, iovcnt)) > 0) {
+        gettimeofday(&cd->last_recv_time, NULL);
+        goto out;
+    }
+
+fatal_err:
+    ((struct cf_conn *)(xprt->xp_p1))->strm_stat = XPRT_DIED;
+out:
+    return (nbytes);
+}
+
+/*
+ * writes data to the tcp connection.
+ * Any error is fatal and the connection is closed.
+ */
+static size_t
+writev_vc(void *xprtp, struct iovec *iov, int iovcnt)
+{
+    SVCXPRT *xprt;
+    struct cf_conn *cd;
+    size_t nbytes;
+
+    xprt = (SVCXPRT *)xprtp;
+    assert(xprt != NULL);
+
+    cd = (struct cf_conn *)xprt->xp_p1;
+
+    nbytes = writev(xprt->xp_fd, iov, iovcnt);
+    if (nbytes  < 0) {
+        cd->strm_stat = XPRT_DIED;
+        return (-1);
+    }
+
+    return (nbytes);
 }
 
 static enum xprt_stat
