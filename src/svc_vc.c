@@ -80,8 +80,10 @@ static void svc_vc_destroy(SVCXPRT *);
 static void __svc_vc_dodestroy (SVCXPRT *);
 static int read_vc(void *, void *, int);
 static int write_vc(void *, void *, int);
-static size_t readv_vc(void *xprtp, struct iovec *iov, int iovcnt);
-static size_t writev_vc(void *xprtp, struct iovec *iov, int iovcnt);
+static size_t readv_vc(void *xprtp, struct iovec *iov, int iovcnt,
+                       uint32_t flags);
+static size_t writev_vc(void *xprtp, struct iovec *iov, int iovcnt,
+                        uint32_t flags);
 static enum xprt_stat svc_vc_stat(SVCXPRT *);
 static bool svc_vc_recv(SVCXPRT *, struct rpc_msg *);
 static bool svc_vc_getargs(SVCXPRT *, xdrproc_t, void *);
@@ -893,7 +895,7 @@ write_vc(void *xprtp, void *buf, int len)
  * fatal for the connection.
  */
 static size_t
-readv_vc(void *xprtp, struct iovec *iov, int iovcnt)
+readv_vc(void *xprtp, struct iovec *iov, int iovcnt, uint32_t flags)
 {
     SVCXPRT *xprt;
     int milliseconds = 35 * 1000; /* XXX shouldn't this be configurable? */
@@ -941,7 +943,7 @@ out:
  * Any error is fatal and the connection is closed.
  */
 static size_t
-writev_vc(void *xprtp, struct iovec *iov, int iovcnt)
+writev_vc(void *xprtp, struct iovec *iov, int iovcnt, uint32_t flags)
 {
     SVCXPRT *xprt;
     struct cf_conn *cd;

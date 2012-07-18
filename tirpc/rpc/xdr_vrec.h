@@ -27,6 +27,9 @@
 #include <stdbool.h>
 #include <misc/opr_queue.h>
 
+
+#define VR_FLAG_RECLAIM 0x0001
+
 struct v_rec
 {
     struct opr_queue q;
@@ -46,25 +49,29 @@ struct v_rec_buf
     void *buf;
 };
 
-/* XXX deleteme */
 #define VQSIZE 64
-struct v_q
+
+struct v_rec_pos_t
 {
-    struct v_rec *vreqs[VQSIZE]; /* array of pointers to v_reqs */
-    int len; /* slots in use */
+    struct v_rec *vrec;
+    int32_t loff; /* logical byte offset (convenience?) */
+    int32_t bpos; /* buffer index (offset) in the current stream */
+    int32_t boff; /* byte offset in buffer bix */
+    int32_t btbc; /* bytes to be consumed */
 };
 
-struct opr_queue_ex
+struct v_rec_queue
 {
     struct opr_queue q;
+    struct v_rec_pos_t pos;
     int32_t size;
 };
 
 /* Preallocate memory */
 struct vrec_prealloc
 {
-    struct opr_queue_ex v_req;
-    struct opr_queue_ex v_req_buf;
+    struct v_rec_queue v_req;
+    struct v_rec_queue v_req_buf;
 };
 
 struct v_rec_strm
@@ -76,9 +83,9 @@ struct v_rec_strm
     /*
      * out-going bits
      */
-    size_t (*writev)(void *, struct iovec *, int);
+    size_t (*writev)(void *, struct iovec *, int, uint32_t);
 
-    struct opr_queue out_q;
+    struct v_rec_queue out_q;
 
     char *out_base; /* output buffer (points to frag header) */
     char *out_finger; /* next output position */
@@ -89,9 +96,9 @@ struct v_rec_strm
     /*
      * in-coming bits
      */
-    size_t (*readv)(void *, struct iovec *, int);
+    size_t (*readv)(void *, struct iovec *, int, uint32_t);
 
-    struct opr_queue in_q;
+    struct v_rec_queue in_q;
 
     u_long in_size; /* fixed size of the input buffer */
     char *in_base;
@@ -113,3 +120,8 @@ struct v_rec_strm
 };
 
 typedef struct v_rec_strm V_RECSTREAM;
+
+/* i/o provider inteface */
+
+#define VREC_NONE       0x0000
+#define VREC_O_NONBLOCK 0x0001

@@ -144,11 +144,11 @@ init_prealloc_queues(V_RECSTREAM *vrstrm)
 static inline struct v_rec *
 vrec_get_vrec(V_RECSTREAM *vrstrm)
 {
-    struct v_rec *vrec =
-        opr_queue_First(&vrstrm->prealloc.v_req.q, struct v_rec, q);
-    if (unlikely(! vrec)) {
+    struct v_rec *vrec;
+    if (unlikely(vrstrm->prealloc.v_req.size == 0)) {
         vrec = mem_alloc(sizeof(struct v_rec));
     } else {
+        vrec = opr_queue_First(&vrstrm->prealloc.v_req.q, struct v_rec, q);
         opr_queue_Remove(&vrec->q);
         (vrstrm->prealloc.v_req.size)--;
     }
@@ -161,6 +161,23 @@ vrec_put_vrec(V_RECSTREAM *vrstrm, struct v_rec *vrec)
     opr_queue_Append(&vrstrm->prealloc.v_req.q, &vrec->q);
     (vrstrm->prealloc.v_req.size)++;
 }
+
+#if 0 /* jemalloc docs warn about reclaim */
+#define vrec_alloc_buffer(size) mem_alloc_aligned(0x8, (size))
+#else
+#define vrec_alloc_buffer(size) mem_alloc((size))
+#endif
+#define vrec_release_buffer(addr) mem_free((addr), 0)
+
+#define vrec_qlen(q) ((q)->size)
+#define vrec_inpos(vrstrm) (&vrstrm->in_q.pos)
+#define vrec_outpos(vrstrm) (&vrstrm->out_q.pos)
+
+static inline void vrec_append_rec(struct v_rec_queue *q, struct v_rec *vrec)
+{
+    opr_queue_Append(&q->q, &vrec->q);
+}
+
 
 /*
  * Create an xdr handle for xdrrec
@@ -177,19 +194,15 @@ xdr_vrec_create(XDR *xdrs,
                 u_int recvsize,
                 void *tcp_handle,
                 /* like read, but pass it a tcp_handle, not sock */
-                size_t (*xreadv)(void *, struct iovec *, int),
+                size_t (*xreadv)(void *, struct iovec *, int, uint32_t),
                 /* like write, but pass it a tcp_handle, not sock */
-                size_t (*xwritev)(void *, struct iovec *, int))
+                size_t (*xwritev)(void *, struct iovec *, int, uint32_t))
 {
     V_RECSTREAM *vrstrm = mem_alloc(sizeof(V_RECSTREAM));
 
     if (vrstrm == NULL) {
         __warnx(TIRPC_DEBUG_FLAG_XDRREC,
                 "xdr_vrec_create: out of memory");
-        /*
-         *  This is bad.  Should rework xdrrec_create to
-         *  return a handle, and in this case return NULL
-         */
         return;
     }
 
@@ -204,7 +217,7 @@ xdr_vrec_create(XDR *xdrs,
     vrstrm->readv = xreadv;
     vrstrm->writev = xwritev;
 
-    opr_queue_Init(&vrstrm->out_q);
+    opr_queue_Init(&vrstrm->out_q.q);
 
     /* XXX */
     vrstrm->out_finger = vrstrm->out_boundry = vrstrm->out_base;
@@ -213,7 +226,7 @@ xdr_vrec_create(XDR *xdrs,
     vrstrm->out_boundry += sendsize;
     vrstrm->frag_sent = FALSE;
 
-    opr_queue_Init(&vrstrm->in_q);
+    opr_queue_Init(&vrstrm->in_q.q);
 
     vrstrm->in_size = recvsize;
     /* XXX */
@@ -534,6 +547,35 @@ xdr_vrec_setpos(XDR *xdrs, u_int pos)
 static int32_t *
 xdr_vrec_inline(XDR *xdrs, u_int len)
 {
+    V_RECSTREAM *vrstrm = (V_RECSTREAM *)xdrs->x_private;
+    struct v_rec_pos_t *pos;
+    int32_t *buf = NULL;
+
+    /* ok, we keep xdrrec's inline concept intact--return
+     * bytes only if they are in a buffer (but we give it
+     * an extra kick on skiprecord) */
+
+    switch (xdrs->x_op) {
+
+    case XDR_ENCODE:
+        /* XXX we certainly use this, need to be careful */
+        abort();
+        break;
+
+    case XDR_DECODE:
+        pos = vrec_inpos(vrstrm);
+        if (pos->btbc >= len) {
+            buf = (int32_t *)(void *)(pos->vrec->base + pos->boff);
+            pos->btbc -= len;
+            pos->boff += len;
+        }
+        break;
+
+    case XDR_FREE:
+        break;
+    }
+    return (buf);
+
 #if 0 /* XXX */
     RECSTREAM *rstrm = (RECSTREAM *)xdrs->x_private;
     int32_t *buf = NULL;
@@ -560,9 +602,6 @@ xdr_vrec_inline(XDR *xdrs, u_int len)
         break;
     }
     return (buf);
-#else
-    abort();
-    return (FALSE);
 #endif /* 0 */
 }
 
@@ -593,7 +632,41 @@ bool
 xdr_vrec_skiprecord(XDR *xdrs)
 {
     V_RECSTREAM *vrstrm = (V_RECSTREAM *)(xdrs->x_private);
-    enum xprt_stat xstat;
+    struct v_rec_pos_t *pos;
+    struct iovec iov[1];
+    struct v_rec *vrec;
+    uint32_t nbytes;
+
+    if (unlikely(vrec_qlen(&vrstrm->in_q)) == 0)
+        return (TRUE);
+
+    /* XXXX fix this, if we're actually skipping a
+     * record XXX !*/
+    pos = &vrstrm->in_q.pos;
+
+    /* next, line up a new buffer head on which to read
+     * incoming bytes */
+    vrec = vrec_get_vrec(vrstrm);
+    vrec->base = vrec_alloc_buffer(8192); /* first buffer in a fragment */
+    vrec->flags = VR_FLAG_RECLAIM;
+    vrec->off = 0;
+    vrec->len = 0;
+
+    /* XXX improve */
+    pos->vrec = vrec;
+    pos->loff = 0; /* XXX */
+    pos->bpos = 0;
+    pos->boff = 0;
+    pos->btbc = 0;
+
+    vrec_append_rec(&vrstrm->in_q, vrec);
+
+    /* XXX assume it's better to read into WRITE data, than force
+     * lots of tiny reads (as xdrrec seems to) */
+    iov->iov_base = vrec->base;
+    iov->iov_len = 8192; /* LFP */
+    nbytes = vrstrm->readv(vrstrm->tcp_handle, iov, 1, VREC_O_NONBLOCK);
+    pos->btbc += nbytes;
 
 #if 0 /* XXX */
     RECSTREAM *rstrm = (RECSTREAM *)(xdrs->x_private);
