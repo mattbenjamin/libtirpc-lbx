@@ -90,8 +90,8 @@ static const struct  xdr_ops xdrrec_ops = {
     xdrrec_inline,
     xdrrec_destroy,
     (dummyfunc3) xdrrec_noop, /* x_control */
-    (dummyfunc4) xdrrec_noop, /* x_getbytes2 */
-    (dummyfunc4) xdrrec_noop  /* x_putbytes2 */
+    (dummyfunc4) xdrrec_noop, /* x_getbufs */
+    (dummyfunc4) xdrrec_noop  /* x_putbufs */
 };
 
 /*

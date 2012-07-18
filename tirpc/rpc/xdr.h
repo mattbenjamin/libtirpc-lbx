@@ -103,8 +103,25 @@ enum xdr_op {
 #define RNDUP(x)  (((x) + BYTES_PER_XDR_UNIT - 1) & ~(BYTES_PER_XDR_UNIT - 1))
 #else /* this is the old routine */
 #define RNDUP(x)  ((((x) + BYTES_PER_XDR_UNIT - 1) / BYTES_PER_XDR_UNIT) \
-		    * BYTES_PER_XDR_UNIT)
+                   * BYTES_PER_XDR_UNIT)
 #endif
+
+/* XDR buffer descriptors. */
+typedef struct __rpc_buffer {
+    void *xb_base;
+    int   xb_len;
+    u_int xb_flags;
+    void *xb_p1; /* XDR private data */
+    void *xb_u1; /* User data */
+} xdr_buffer;
+
+typedef struct __rpc_buffers {
+    xdr_buffer *xbs_buf; /* array of buffers */
+    int         xbs_cnt; /* count of buffers */
+    u_int       xbs_flags;
+    void       *xbs_p1;
+    void       *xbs_u1;
+} xdr_uio;
 
 /*
  * The XDR handle.
@@ -129,11 +146,12 @@ typedef struct __rpc_xdr {
         bool (*x_setpostn)(struct __rpc_xdr *, u_int);
         /* buf quick ptr to buffered data */
         int32_t *(*x_inline)(struct __rpc_xdr *, u_int);
-        /* free privates of this xdr_stream */
+        /* free private resources of this xdr_stream */
         void (*x_destroy)(struct __rpc_xdr *);
         bool (*x_control)(struct __rpc_xdr *, int, void *);
-        bool (*x_getbytes2)(struct __rpc_xdr *, char *, u_int, u_int);
-        bool (*x_putbytes2)(struct __rpc_xdr *, const char *, u_int, u_int);
+        /* new vector and refcounted interfaces */
+        bool (*x_getbufs)(struct __rpc_xdr *, xdr_uio *, u_int, u_int);
+        bool (*x_putbufs)(struct __rpc_xdr *, xdr_uio *, u_int, u_int);
     } *x_ops;
     void *x_public; /* users' data */
     void *x_private; /* pointer to private data */
@@ -209,6 +227,16 @@ xdr_putint32(XDR *xdrs, int32_t *ip)
     (*(xdrs)->x_ops->x_putbytes)(xdrs, addr, len)
 #define xdr_putbytes(xdrs, addr, len)   \
     (*(xdrs)->x_ops->x_putbytes)(xdrs, addr, len)
+
+#define XDR_GETBUFS(xdrs, uio, len, flags) \
+    (*(xdrs)->x_ops->x_getbufs)(xdrs, uio, len, flags)
+#define xdr_getbufs(xdrs, uio, len, flags) \
+    (*(xdrs)->x_ops->x_getbufs)(xdrs, uio, len, flags)
+
+#define XDR_PUTBUFS(xdrs, uio, len, flags) \
+    (*(xdrs)->x_ops->x_putbufs)(xdrs, uio, len, flags)
+#define xdr_putbufs(xdrs, uio, len, flags) \
+    (*(xdrs)->x_ops->x_putbufs)(xdrs, uio, len, flags)
 
 #define XDR_GETPOS(xdrs)                        \
     (*(xdrs)->x_ops->x_getpostn)(xdrs)

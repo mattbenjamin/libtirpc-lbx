@@ -73,8 +73,8 @@ static const struct xdr_ops xdrstdio_ops = {
     xdrstdio_inline, /* prime stream for inline macros */
     xdrstdio_destroy, /* destroy stream */
     (dummyfunc3) xdrstdio_noop, /* x_control */
-    (dummyfunc4) xdrstdio_noop, /* x_getbytes2 */
-    (dummyfunc4) xdrstdio_noop  /* x_putbytes2 */
+    (dummyfunc4) xdrstdio_noop, /* x_getbufs */
+    (dummyfunc4) xdrstdio_noop  /* x_putbufs */
 };
 
 /*

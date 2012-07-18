@@ -142,8 +142,8 @@ xdr_sizeof(xdrproc_t func,  void *data)
     /* the other harmless ones */
     ops.x_getlong =  (dummyfunc1) harmless;
     ops.x_getbytes = (dummyfunc2) harmless;
-    ops.x_getbytes2 = (dummyfunc3) harmless;
-    ops.x_putbytes2 = (dummyfunc3) harmless;
+    ops.x_getbufs = (dummyfunc3) harmless;
+    ops.x_putbufs = (dummyfunc3) harmless;
 
     x.x_op = XDR_ENCODE;
     x.x_ops = &ops;
