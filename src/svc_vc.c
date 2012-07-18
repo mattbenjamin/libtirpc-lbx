@@ -82,9 +82,9 @@ static void __svc_vc_dodestroy (SVCXPRT *);
 static int read_vc(void *, void *, int);
 static int write_vc(void *, void *, int);
 static size_t readv_vc(void *xprtp, struct iovec *iov, int iovcnt,
-                       uint32_t flags);
+                       u_int flags);
 static size_t writev_vc(void *xprtp, struct iovec *iov, int iovcnt,
-                        uint32_t flags);
+                        u_int flags);
 static enum xprt_stat svc_vc_stat(SVCXPRT *);
 static bool svc_vc_recv(SVCXPRT *, struct rpc_msg *);
 static bool svc_vc_getargs(SVCXPRT *, xdrproc_t, void *);
@@ -411,7 +411,7 @@ freedata:
 }
 
 SVCXPRT *
-makefd_xprt(int fd, u_int sendsize, u_int recvsize)
+makefd_xprt(int fd, u_int sendsz, u_int recvsz)
 {
     SVCXPRT *xprt;
     struct cf_conn *cd;
@@ -448,8 +448,14 @@ makefd_xprt(int fd, u_int sendsize, u_int recvsize)
     }
     cd->strm_stat = XPRT_IDLE;
 
-    xdr_vrec_create(&(cd->xdrs), sendsize, recvsize, xprt,
-                    readv_vc, writev_vc);
+    /* parallel send/recv */
+    xdr_vrec_create(&(cd->xdrs_in), sendsz, recvsz, xprt,
+                    readv_vc, NULL,
+                    XDR_VREC_INREC);
+
+    xdr_vrec_create(&(cd->xdrs_out), sendsz, recvsz, xprt,
+                    NULL, writev_vc,
+                    XDR_VREC_OUTREC);
 
     xprt->xp_p1 = cd;
     xprt->xp_auth = NULL;
@@ -612,7 +618,8 @@ __svc_vc_dodestroy(SVCXPRT *xprt)
         xprt->xp_port = 0;
     } else {
         /* an actual connection socket */
-        XDR_DESTROY(&(cd->xdrs));
+        XDR_DESTROY(&(cd->xdrs_in));
+        XDR_DESTROY(&(cd->xdrs_out));
         mem_free(cd, sizeof(struct cf_conn));
     }
     if (xprt->xp_auth != NULL) {
@@ -896,7 +903,7 @@ write_vc(void *xprtp, void *buf, int len)
  * fatal for the connection.
  */
 static size_t
-readv_vc(void *xprtp, struct iovec *iov, int iovcnt, uint32_t flags)
+readv_vc(void *xprtp, struct iovec *iov, int iovcnt, u_int flags)
 {
     SVCXPRT *xprt;
     int milliseconds = 35 * 1000; /* XXX shouldn't this be configurable? */
@@ -959,7 +966,7 @@ out:
  * Any error is fatal and the connection is closed.
  */
 static size_t
-writev_vc(void *xprtp, struct iovec *iov, int iovcnt, uint32_t flags)
+writev_vc(void *xprtp, struct iovec *iov, int iovcnt, u_int flags)
 {
     SVCXPRT *xprt;
     struct cf_conn *cd;
@@ -990,8 +997,11 @@ svc_vc_stat(SVCXPRT *xprt)
 
     if (cd->strm_stat == XPRT_DIED)
         return (XPRT_DIED);
-    if (! xdr_vrec_eof(&(cd->xdrs)))
+
+    /* SVC_STAT() only cares about the recv queue */
+    if (! xdr_vrec_eof(&(cd->xdrs_in)))
         return (XPRT_MOREREQS);
+
     return (XPRT_IDLE);
 }
 
@@ -1005,27 +1015,29 @@ svc_vc_recv(SVCXPRT *xprt, struct rpc_msg *msg)
     assert(msg != NULL);
 
     cd = (struct cf_conn *)(xprt->xp_p1);
-    xdrs = &(cd->xdrs);
 
-    /* XXX currently, must be FALSE */
-#if 0
+    xdrs = &(cd->xdrs_in); /* recv queue */
+
+    /* XXX assert(!cd->nonblock) */
     if (cd->nonblock) {
         if (!__xdrrec_getrec(xdrs, &cd->strm_stat, TRUE))
             return FALSE;
     }
-#endif
 
     xdrs->x_op = XDR_DECODE;
+
     /*
      * No need skip records with nonblocking connections
      */
     if (cd->nonblock == FALSE)
-        (void)xdr_vrec_skiprecord(xdrs);
+        (void) xdr_vrec_skiprecord(xdrs);
+
     if (xdr_dplx_msg(xdrs, msg)) {
         /* XXX actually using cd->x_id !MT-SAFE */
         cd->x_id = msg->rm_xid;
         return (TRUE);
     }
+
     cd->strm_stat = XPRT_DIED;
     return (FALSE);
 }
@@ -1038,11 +1050,12 @@ svc_vc_getargs(SVCXPRT *xprt, xdrproc_t xdr_args, void *args_ptr)
     assert(xprt != NULL);
     /* args_ptr may be NULL */
 
-    /* XXXX TODO: duplex unification (xdrs)  */
+    /* XXXX TODO: bidirectional unification */
 
     if (! SVCAUTH_UNWRAP(xprt->xp_auth,
-                         &(((struct cf_conn *)(xprt->xp_p1))->xdrs),
+                         &(((struct cf_conn *)(xprt->xp_p1))->xdrs_in),
                          xdr_args, args_ptr)) {
+#if 0 /* XXX bidrectional unification (there will be only one queue pair) */
         CLIENT *cl;
         cl = (CLIENT *) xprt->xp_p4;
         if (cl) {
@@ -1056,6 +1069,7 @@ svc_vc_getargs(SVCXPRT *xprt, xdrproc_t xdr_args, void *args_ptr)
                 }
             }
         }
+#endif /* 0 */
         rslt = FALSE;
     }
 
@@ -1073,7 +1087,7 @@ svc_vc_getargs2(SVCXPRT *xprt, xdrproc_t xdr_args, void *args_ptr,
 {
     bool rslt = TRUE;
     struct cf_conn *cd = (struct cf_conn *) xprt->xp_p1;
-    XDR *xdrs = &cd->xdrs;
+    XDR *xdrs = &cd->xdrs_in; /* recv queue */
 
     /* threads u_data for advanced decoders*/
     xdrs->x_public = u_data;
@@ -1081,8 +1095,9 @@ svc_vc_getargs2(SVCXPRT *xprt, xdrproc_t xdr_args, void *args_ptr,
     /* XXX TODO: duplex unification (xdrs)  */
 
     if (! SVCAUTH_UNWRAP(xprt->xp_auth,
-                         &(((struct cf_conn *)(xprt->xp_p1))->xdrs),
+                         &(((struct cf_conn *)(xprt->xp_p1))->xdrs_in),
                          xdr_args, args_ptr)) {
+#if 0 /* XXX bidrectional unification (there will be only one queue pair) */
         CLIENT *cl;
         cl = (CLIENT *) xprt->xp_p4;
         if (cl) {
@@ -1096,6 +1111,7 @@ svc_vc_getargs2(SVCXPRT *xprt, xdrproc_t xdr_args, void *args_ptr,
                 }
             }
         }
+#endif /* 0 */
         rslt = FALSE;
     }
 
@@ -1115,7 +1131,7 @@ svc_vc_freeargs(SVCXPRT *xprt, xdrproc_t xdr_args, void *args_ptr)
     assert(xprt != NULL);
     /* args_ptr may be NULL */
 
-    xdrs = &(((struct cf_conn *)(xprt->xp_p1))->xdrs);
+    xdrs = &(((struct cf_conn *)(xprt->xp_p1))->xdrs_in);
 
     xdrs->x_op = XDR_FREE;
     return ((*xdr_args)(xdrs, args_ptr));
@@ -1138,7 +1154,7 @@ svc_vc_reply(SVCXPRT *xprt, struct rpc_msg *msg)
     assert(msg != NULL);
 
     cd = (struct cf_conn *)(xprt->xp_p1);
-    xdrs = &(cd->xdrs);
+    xdrs = &(cd->xdrs_out); /* send queue */
 
 #if 0 /* XXX duplex debugging */
     if (xprt->xp_p4) {
@@ -1555,7 +1571,9 @@ void svc_vc_destroy_xprt(SVCXPRT * xprt)
 
     svc_rqst_finalize_xprt(xprt);
 
-    XDR_DESTROY(&(cd->xdrs));
+    XDR_DESTROY(&(cd->xdrs_in));
+    XDR_DESTROY(&(cd->xdrs_out));
+
     mem_free(cd, sizeof(struct cf_conn));
     mem_free(xprt, sizeof(SVCXPRT));
 }
@@ -1584,7 +1602,15 @@ SVCXPRT *svc_vc_create_xprt(u_long sendsz, u_long recvsz)
     svc_rqst_init_xprt(xprt);
 
     cd->strm_stat = XPRT_IDLE;
-    xdr_vrec_create(&(cd->xdrs), sendsz, recvsz, xprt, readv_vc, writev_vc);
+
+    /* parallel send/recv */
+    xdr_vrec_create(&(cd->xdrs_in), sendsz, recvsz, xprt,
+                    readv_vc, NULL,
+                    XDR_VREC_INREC);
+
+    xdr_vrec_create(&(cd->xdrs_out), sendsz, recvsz, xprt,
+                    NULL, writev_vc,
+                    XDR_VREC_OUTREC);
 
     xprt->xp_p1 = cd;
     xprt->xp_verf.oa_base = cd->verf_body;

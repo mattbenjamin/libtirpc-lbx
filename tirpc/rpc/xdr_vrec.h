@@ -33,8 +33,8 @@
 struct v_rec
 {
     struct opr_queue q;
+    uint32_t refcnt;
     void *base;
-    struct v_rec *alt;
     void *p_1; /* private data */
     void *u_1; /* user data */
     u_int off;
@@ -57,14 +57,14 @@ struct v_rec_pos_t
     int32_t loff; /* logical byte offset (convenience?) */
     int32_t bpos; /* buffer index (offset) in the current stream */
     int32_t boff; /* byte offset in buffer bix */
-    int32_t btbc; /* bytes to be consumed */
 };
 
 struct v_rec_queue
 {
     struct opr_queue q;
-    struct v_rec_pos_t pos;
-    int32_t size;
+    struct v_rec_pos_t fpos; /* fill position */
+    struct v_rec_pos_t lpos; /* logical position, GET|SETPOS */
+    int32_t size; /* count of buffer segments */
 };
 
 /* Preallocate memory */
@@ -100,12 +100,16 @@ struct v_rec_strm
 
     struct v_rec_queue in_q;
 
-    u_long in_size; /* fixed size of the input buffer */
+    u_long in_size; /* default size of allocated buffers */
+#if 0
     char *in_base;
     char *in_finger; /* location of next byte to be had */
     char *in_boundry; /* can read up to this location */
+#endif
+
     long fbtbc;  /* fragment bytes to be consumed */
     bool last_frag;
+
     u_int sendsize;
     u_int recvsize;
 
@@ -123,5 +127,24 @@ typedef struct v_rec_strm V_RECSTREAM;
 
 /* i/o provider inteface */
 
-#define VREC_NONE       0x0000
-#define VREC_O_NONBLOCK 0x0001
+#define VREC_NONE          0x0000
+#define VREC_O_NONBLOCK    0x0001
+
+/* vector equivalents */
+
+#define XDR_VREC_INREC     0x0001
+#define XDR_VREC_OUTREC    0x0002
+
+extern void xdr_vrec_create(XDR *, u_int, u_int, void *,
+                            size_t (*)(void *, struct iovec *, int, u_int),
+                            size_t (*)(void *, struct iovec *, int, u_int),
+                            u_int flags);
+
+/* make end of xdr record */
+extern bool xdr_vrec_endofrecord(XDR *, bool);
+
+/* move to beginning of next record */
+extern bool xdr_vrec_skiprecord(XDR *);
+
+/* true if no more input */
+extern bool xdr_vrec_eof(XDR *);

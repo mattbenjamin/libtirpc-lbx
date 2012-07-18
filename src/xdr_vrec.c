@@ -175,9 +175,22 @@ vrec_put_vrec(V_RECSTREAM *vrstrm, struct v_rec *vrec)
 
 static inline void vrec_append_rec(struct v_rec_queue *q, struct v_rec *vrec)
 {
-    opr_queue_Append(&q->q, &vrec->q);
+    opr_queue_Append(&q->q, &vrec->q);http://www.realitychex.com/
 }
 
+static inline size_t
+vrec_nb_readahead(V_RECSTREAM *vrstrm)
+{
+    struct v_rec_pos_t *pos;
+    struct iovec iov[1];
+    struct v_rec *vrec;
+    uint32_t nbytes;
+
+    vrec = opr_queue_Last(&vrstrm->in_q);
+    pos = &vrstrm->in_q.pos;
+
+    
+}
 
 /*
  * Create an xdr handle for xdrrec
@@ -194,9 +207,10 @@ xdr_vrec_create(XDR *xdrs,
                 u_int recvsize,
                 void *tcp_handle,
                 /* like read, but pass it a tcp_handle, not sock */
-                size_t (*xreadv)(void *, struct iovec *, int, uint32_t),
+                size_t (*xreadv)(void *, struct iovec *, int, u_int),
                 /* like write, but pass it a tcp_handle, not sock */
-                size_t (*xwritev)(void *, struct iovec *, int, uint32_t))
+                size_t (*xwritev)(void *, struct iovec *, int, u_int),
+                u_int flags)
 {
     V_RECSTREAM *vrstrm = mem_alloc(sizeof(V_RECSTREAM));
 

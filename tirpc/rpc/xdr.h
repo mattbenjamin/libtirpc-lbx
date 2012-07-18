@@ -407,19 +407,6 @@ extern bool xdrrec_skiprecord(XDR *);
 /* true if no more input */
 extern bool xdrrec_eof(XDR *);
 
-/* vector equivalents */
-extern void xdr_vrec_create(XDR *, u_int, u_int, void *,
-                            size_t (*)(void *, struct iovec *, int, uint32_t),
-                            size_t (*)(void *, struct iovec *, int, uint32_t));
-
-/* make end of xdr record */
-extern bool xdr_vrec_endofrecord(XDR *, bool);
-
-/* move to beginning of next record */
-extern bool xdr_vrec_skiprecord(XDR *);
-
-/* true if no more input */
-extern bool xdr_vrec_eof(XDR *);
 __END_DECLS
 
 #endif /* !_TIRPC_XDR_H */
