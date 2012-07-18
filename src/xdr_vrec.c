@@ -637,9 +637,6 @@ xdr_vrec_skiprecord(XDR *xdrs)
     struct v_rec *vrec;
     uint32_t nbytes;
 
-    if (unlikely(vrec_qlen(&vrstrm->in_q)) == 0)
-        return (TRUE);
-
     /* XXXX fix this, if we're actually skipping a
      * record XXX !*/
     pos = &vrstrm->in_q.pos;
@@ -667,6 +664,8 @@ xdr_vrec_skiprecord(XDR *xdrs)
     iov->iov_len = 8192; /* LFP */
     nbytes = vrstrm->readv(vrstrm->tcp_handle, iov, 1, VREC_O_NONBLOCK);
     pos->btbc += nbytes;
+
+    return (TRUE);
 
 #if 0 /* XXX */
     RECSTREAM *rstrm = (RECSTREAM *)(xdrs->x_private);

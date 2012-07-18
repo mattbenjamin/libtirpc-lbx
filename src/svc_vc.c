@@ -69,6 +69,7 @@
 #include "svc_xprt.h"
 #include "vc_lock.h"
 #include <rpc/svc_rqst.h>
+#include <rpc/xdr_vrec.h>
 
 #include <getpeereid.h>
 
@@ -902,14 +903,25 @@ readv_vc(void *xprtp, struct iovec *iov, int iovcnt, uint32_t flags)
     struct pollfd pollfd;
     struct cf_conn *cd;
     size_t nbytes = -1;
+    bool reblock = FALSE;
+    int fflags;
 
     xprt = (SVCXPRT *)xprtp;
     assert(xprt != NULL);
 
     cd = (struct cf_conn *)xprt->xp_p1;
 
-    /* XXX svc_dplx side of poll -- I think we want to
-     * consider making this hot-threaded as well (Matt) */
+    /* support readahead */
+    if (flags & VREC_O_NONBLOCK) {
+        if (! cd->nonblock) {
+            fflags = fcntl(xprt->xp_fd, F_GETFL, 0);
+            if (fflags == -1)
+                goto fatal_err;
+            if (fcntl(xprt->xp_fd, F_SETFL, fflags | O_NONBLOCK) == -1)
+                goto fatal_err;
+            reblock = TRUE;
+        }
+    }
 
     do {
         pollfd.fd = xprt->xp_fd;
@@ -935,6 +947,10 @@ readv_vc(void *xprtp, struct iovec *iov, int iovcnt, uint32_t flags)
 fatal_err:
     ((struct cf_conn *)(xprt->xp_p1))->strm_stat = XPRT_DIED;
 out:
+    if(reblock) {
+        (void) fcntl(xprt->xp_fd, F_SETFL, fflags & ~O_NONBLOCK);
+    }
+
     return (nbytes);
 }
 
