@@ -131,8 +131,12 @@ vrec_get_vrec(V_RECSTREAM *vstrm)
 static inline void
 vrec_put_vrec(V_RECSTREAM *vstrm, struct v_rec *vrec)
 {
-    opr_queue_Append(&vstrm->prealloc.v_req.q, &vrec->ioq);
-    (vstrm->prealloc.v_req.size)++;
+    if (unlikely(vstrm->prealloc.v_req.size > VQSIZE))
+        mem_free(vrec, sizeof(struct v_rec));
+    else {
+        opr_queue_Append(&vstrm->prealloc.v_req.q, &vrec->ioq);
+        (vstrm->prealloc.v_req.size)++;
+    }
 }
 
 #if 0 /* jemalloc docs warn about reclaim */
