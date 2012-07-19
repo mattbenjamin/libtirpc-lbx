@@ -647,23 +647,39 @@ xdr_vrec_skiprecord(XDR *xdrs)
 bool
 xdr_vrec_eof(XDR *xdrs)
 {
-#if 0 /* XXX */
-    RECSTREAM *rstrm = (RECSTREAM *)(xdrs->x_private);
+    V_RECSTREAM *vstrm = (V_RECSTREAM *)(xdrs->x_private);
 
-    while (rstrm->fbtbc > 0 || (! rstrm->last_frag)) {
-        if (! skip_input_bytes(rstrm, rstrm->fbtbc))
-            return (TRUE);
-        rstrm->fbtbc = 0;
-        if ((! rstrm->last_frag) && (! set_input_fragment(rstrm)))
-            return (TRUE);
-    }
-    if (rstrm->in_finger == rstrm->in_boundry)
-        return (TRUE);
-    return (FALSE);
-#else
-    abort();
-    return (FALSE);
+    switch (vstrm->direction) {
+    case XDR_VREC_INREC:
+        switch (xdrs->x_op) {
+        case XDR_DECODE:
+            /* stream reset */
+            while (vstrm->st_u.in.fbtbc > 0 ||
+                   (! vstrm->st_u.in.last_frag)) {
+                if (! vrec_skip_input_bytes(vstrm, vstrm->st_u.in.fbtbc))
+                    return (TRUE);
+                if ((! vstrm->st_u.in.last_frag) &&
+                    (! vrec_set_input_fragment(vstrm)))
+                    return (TRUE);
+                /* XXX missing boundary case? */
+#if 0 /* corresponding logic in xdrrec: */
+                if (rstrm->in_finger == rstrm->in_boundry)
+                    return (TRUE);
 #endif /* 0 */
+            }
+            break;
+        case XDR_ENCODE:
+        default:
+            abort();
+            break;
+        }
+        break;
+    case XDR_VREC_OUTREC:
+    default:
+        abort();
+        break;
+    }
+    return (FALSE);
 }
 
 /*
