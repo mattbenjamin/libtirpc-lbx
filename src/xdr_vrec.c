@@ -1,4 +1,3 @@
-
 /*
  * Copyright (c) 2012 Linux Box Corporation.
  * All rights reserved.
@@ -83,6 +82,7 @@ static const struct  xdr_ops xdr_vrec_ops = {
 static u_int fix_buf_size(u_int);
 static bool flush_out(V_RECSTREAM *, bool);
 static bool fill_input_buf(V_RECSTREAM *);
+static bool vrec_get_input_bytes(V_RECSTREAM *, char *, int);
 static bool vrec_get_input_fragment_bytes(V_RECSTREAM *, char **, int);
 static bool vrec_set_input_fragment(V_RECSTREAM *);
 static bool vrec_skip_input_bytes(V_RECSTREAM *, long);
@@ -191,7 +191,7 @@ vrec_readahead_bytes(V_RECSTREAM *vstrm, int len, u_int flags)
     pos = vrec_fpos(vstrm);
     iov->iov_base = pos->vrec->base + pos->vrec->off;
     iov->iov_len = len;
-    nbytes = vstrm->ops.readv(vstrm->vp_handle, iov, 1, VREC_FLAG_NONBLOCK);
+    nbytes = vstrm->ops.readv(vstrm->vp_handle, iov, 1, flags);
     vstrm->st_u.in.rbtbc += nbytes;
     pos->vrec->len += nbytes;
 
@@ -223,8 +223,6 @@ xdr_vrec_create(XDR *xdrs,
     xdrs->x_private = vstrm;
 
     vstrm->vp_handle = xhandle;
-    vstrm->ops.readv = xreadv;
-    vstrm->ops.writev = xwritev;
 
     /* init queues */
     vrec_init_queue(&vstrm->ioq);
@@ -235,13 +233,15 @@ xdr_vrec_create(XDR *xdrs,
 
     switch (direction) {
     case XDR_VREC_INREC:
-        /* XXX finish */
+        vstrm->ops.readv = xreadv;
+        vstrm->st_u.in.readahead_bytes = 1200; /* XXX PMTU? */
         vstrm->st_u.in.fbtbc = 0;
         vstrm->st_u.in.rbtbc = 0;
         vstrm->st_u.in.haveheader = FALSE;
         vstrm->st_u.in.last_frag = TRUE;
         break;
     case XDR_VREC_OUTREC:
+        vstrm->ops.writev = xwritev;
         /* XXX finish */
         vstrm->st_u.out.frag_sent = FALSE;
         break;
@@ -255,7 +255,6 @@ xdr_vrec_create(XDR *xdrs,
 
     return;
 }
-
 
 /*
  * The routines defined below are the xdr ops which will go into the
@@ -311,31 +310,26 @@ xdr_vrec_putlong(XDR *xdrs, const long *lp)
 static bool
 xdr_vrec_getbytes(XDR *xdrs, char *addr, u_int len)
 {
-#if 0 /* XXX */
-    RECSTREAM *rstrm = (RECSTREAM *)(xdrs->x_private);
+    V_RECSTREAM *vstrm = (V_RECSTREAM *)xdrs->x_private;
     int current;
 
     while (len > 0) {
-        current = (int)rstrm->fbtbc;
+        current = (int)vstrm->st_u.in.fbtbc;
         if (current == 0) {
-            if (rstrm->last_frag)
+            if (vstrm->st_u.in.last_frag)
                 return (FALSE);
-            if (! set_input_fragment(rstrm))
+            if (! vrec_set_input_fragment(vstrm))
                 return (FALSE);
             continue;
         }
         current = (len < current) ? len : current;
-        if (! get_input_bytes(rstrm, addr, current))
+        if (! vrec_get_input_bytes(vstrm, addr, current))
             return (FALSE);
         addr += current;
-        rstrm->fbtbc -= current;
+        vstrm->st_u.in.fbtbc -= current;
         len -= current;
     }
     return (TRUE);
-#else
-    abort();
-    return (FALSE);
-#endif /* 0 */
 }
 
 static bool
@@ -427,73 +421,36 @@ xdr_vrec_putbufs(XDR *xdrs, xdr_uio *uio, u_int len, u_int flags)
 static u_int
 xdr_vrec_getpos(XDR *xdrs)
 {
-#if 0 /* XXX */
-    RECSTREAM *rstrm = (RECSTREAM *)xdrs->x_private;
-    off_t pos;
+    V_RECSTREAM *vstrm = (V_RECSTREAM *)(xdrs->x_private);
+    struct v_rec_pos_t *lpos = vrec_lpos(vstrm);
 
-    switch (xdrs->x_op) {
-
-    case XDR_ENCODE:
-        pos = rstrm->out_finger - rstrm->out_base
-            - BYTES_PER_XDR_UNIT;
-        break;
-
-    case XDR_DECODE:
-        pos = rstrm->in_boundry - rstrm->in_finger
-            - BYTES_PER_XDR_UNIT;
-        break;
-
-    default:
-        pos = (off_t) -1;
-        break;
-    }
-    return ((u_int) pos);
-#else
-    abort();
-    return (FALSE);
-#endif /* 0 */
+    return (lpos->loff);
 }
 
 static bool
 xdr_vrec_setpos(XDR *xdrs, u_int pos)
 {
-#if 0 /* XXX */
-    RECSTREAM *rstrm = (RECSTREAM *)xdrs->x_private;
-    u_int currpos = xdrrec_getpos(xdrs);
-    int delta = currpos - pos;
-    char *newpos;
+    V_RECSTREAM *vstrm = (V_RECSTREAM *)(xdrs->x_private);
+    struct v_rec_pos_t *lpos = vrec_lpos(vstrm);
+    struct opr_queue *qiter;
+    struct v_rec *vrec;
+    u_int resid = 0;
+    int ix;
 
-    if ((int)currpos != -1)
-        switch (xdrs->x_op) {
-
-        case XDR_ENCODE:
-            newpos = rstrm->out_finger - delta;
-            if ((newpos > (char *)(void *)(rstrm->frag_header)) &&
-                (newpos < rstrm->out_boundry)) {
-                rstrm->out_finger = newpos;
-                return (TRUE);
-            }
-            break;
-
-        case XDR_DECODE:
-            newpos = rstrm->in_finger - delta;
-            if ((delta < (int)(rstrm->fbtbc)) &&
-                (newpos <= rstrm->in_boundry) &&
-                (newpos >= rstrm->in_base)) {
-                rstrm->in_finger = newpos;
-                rstrm->fbtbc -= delta;
-                return (TRUE);
-            }
-            break;
-
-        case XDR_FREE:
-            break;
+    ix = 0;
+    for (opr_queue_Scan(&(vstrm->ioq.q), qiter)) {
+        vrec = opr_queue_Entry(&vstrm->ioq.q, struct v_rec, ioq);
+        if ((vrec->len + resid) > pos) {
+            lpos->vrec = vrec;
+            lpos->bpos = ix;
+            lpos->loff = pos;
+            lpos->boff = (pos-resid);
+            return (TRUE);
         }
+        resid += vrec->len;
+        ++ix;
+    }
     return (FALSE);
-#else
-    abort();
-    return (FALSE);
-#endif /* 0 */
 }
 
 static int32_t *
@@ -624,9 +581,8 @@ vrec_truncate_input_q(V_RECSTREAM *vstrm, int max)
     vrec->off = 0;
     vrec->len = 0;
 
+    /* fpos is a fill pointer for the buffer queue */
     pos = vrec_fpos(vstrm);
-
-    /* XXX improve */
     pos->vrec = vrec;
     pos->loff = 0;
     pos->bpos = 1; /* first position */
@@ -648,18 +604,25 @@ xdr_vrec_skiprecord(XDR *xdrs)
     case XDR_VREC_INREC:
         switch (xdrs->x_op) {
         case XDR_DECODE:
-            while (vstrm->st_u.in.fbtbc > 0 || (! vstrm->st_u.in.last_frag)) {
+            /* stream reset */
+            while (vstrm->st_u.in.fbtbc > 0 ||
+                   (! vstrm->st_u.in.last_frag)) {
                 if (! vrec_skip_input_bytes(vstrm, vstrm->st_u.in.fbtbc))
                     return (FALSE);
-                /* bound queue size and support future mapped reads */
-                vrec_truncate_input_q(vstrm, 8);
-                vstrm->st_u.in.fbtbc = 0;
-                vstrm->st_u.in.rbtbc = 0;
                 if ((! vstrm->st_u.in.last_frag) &&
                     (! vrec_set_input_fragment(vstrm)))
                     return (FALSE);
             }
-            vstrm->st_u.in.last_frag = FALSE;
+            /* bound queue size and support future mapped reads */
+            vrec_truncate_input_q(vstrm, 8);
+            vstrm->st_u.in.fbtbc = 0;
+            vstrm->st_u.in.rbtbc = 0;
+            if (! vstrm->st_u.in.haveheader) {
+                if (! vrec_set_input_fragment(vstrm))
+                    return (FALSE);
+            }
+            /* reset logical stream position */
+            *(vrec_lpos(vstrm)) = *(vrec_fpos(vstrm));
             break;
         case XDR_ENCODE:
         default:
@@ -767,14 +730,10 @@ static bool
 vrec_get_input_fragment_bytes(V_RECSTREAM *vstrm, char **addr, int len)
 {
     struct v_rec_pos_t *pos;
-    size_t nbytes;
 
     if (! vstrm->st_u.in.rbtbc) {
-        vrec_nb_readahead(vstrm);
-        if (len > vstrm->st_u.in.rbtbc) {
-            vrec_readahead_bytes(vstrm, vstrm->st_u.in.rbtbc - len,
-                                 VREC_FLAG_NONE);
-        }
+        vrec_readahead_bytes(vstrm, vstrm->st_u.in.readahead_bytes,
+                             VREC_FLAG_NONE);
         if (len <= vstrm->st_u.in.rbtbc) {
             pos = vrec_fpos(vstrm);
             *addr = (void *)(pos->vrec->base + pos->boff);
@@ -806,7 +765,16 @@ vrec_set_input_fragment(V_RECSTREAM *vstrm)
     if (header == 0)
         return(FALSE);
     vstrm->st_u.in.fbtbc = header & (~LAST_FRAG);
+
     return (TRUE);
+}
+
+/* Read contguous bytes from stream. */
+static bool
+vrec_get_input_bytes(V_RECSTREAM *vstrm, char *addr, int len)
+{
+
+    return (FALSE);
 }
 
 /* Consume and discard cnt bytes from the input stream. */

@@ -112,6 +112,7 @@ struct v_rec_strm
             struct iovec iovsink[4];
             long fbtbc; /* fragment bytes to be consumed */
             long rbtbc; /* readahead bytes to be consumed */
+            long readahead_bytes; /* bytes to readahead on leading fragments */
             u_int32_t header;
             bool last_frag;
             bool haveheader;
