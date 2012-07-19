@@ -1,55 +1,32 @@
 
 /*
- * Copyright (c) 2009, Sun Microsystems, Inc.
+ * Copyright (c) 2012 Linux Box Corporation.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- * - Redistributions of source code must retain the above copyright notice,
- *   this list of conditions and the following disclaimer.
- * - Redistributions in binary form must reproduce the above copyright notice,
- *   this list of conditions and the following disclaimer in the documentation
- *   and/or other materials provided with the distribution.
- * - Neither the name of Sun Microsystems, Inc. nor the names of its
- *   contributors may be used to endorse or promote products derived
- *   from this software without specific prior written permission.
+ * modification, are permitted provided that the following conditions
+ * are met:
+ * 1. Redistributions of source code must retain the above copyright
+ *    notice, this list of conditions and the following disclaimer.
+ * 2. Redistributions in binary form must reproduce the above copyright
+ *    notice, this list of conditions and the following disclaimer in the
+ *    documentation and/or other materials provided with the distribution.
  *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
- * ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
- * LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
- * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
- * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
- * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
- * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
- * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGE.
+ * THIS SOFTWARE IS PROVIDED BY THE AUTHOR `AS IS'' AND ANY EXPRESS OR
+ * IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES
+ * OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
+ * IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY DIRECT, INDIRECT,
+ * INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT
+ * NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+ * DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+ * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+ * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
+ * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
 #include <config.h>
-#include <sys/cdefs.h>
-#include <sys/cdefs.h>
-
-/*
- * xdr_rec.c, Implements TCP/IP based XDR streams with a "record marking"
- * layer above tcp (for rpc's use).
- *
- * Copyright (C) 1984, Sun Microsystems, Inc.
- *
- * These routines interface XDRSTREAMS to a tcp/ip connection.
- * There is a record marking layer between the xdr stream
- * and the tcp transport level.  A record is composed on one or more
- * record fragments.  A record fragment is a thirty-two bit header followed
- * by n bytes of data, where n is contained in the header.  The header
- * is represented as a htonl(u_long).  Thegh order bit encodes
- * whether or not the fragment is the last fragment of the record
- * (1 => fragment is last, 0 => more fragments to follow.
- * The other 31 bits encode the byte length of the fragment.
- */
 
 #include <sys/types.h>
-
 #include <netinet/in.h>
 
 #include <err.h>
@@ -100,19 +77,6 @@ static const struct  xdr_ops xdr_vrec_ops = {
     xdr_vrec_getbufs,
     xdr_vrec_putbufs
 };
-
-/*
- * A record is composed of one or more record fragments.
- * A record fragment is a four-byte header followed by zero to
- * 2**32-1 bytes.  The header is treated as a long unsigned and is
- * encode/decoded to the network via htonl/ntohl.  The low order 31 bits
- * are a byte count of the fragment.  The highest order bit is a boolean:
- * 1 => this fragment is the last fragment of the record,
- * 0 => this fragment is followed by more fragment(s).
- *
- * The fragment/record machinery is not general;  it is constructed to
- * meet the needs of xdr and rpc based on tcp.
- */
 
 #define LAST_FRAG ((u_int32_t)(1 << 31))
 
