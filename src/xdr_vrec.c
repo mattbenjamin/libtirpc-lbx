@@ -801,6 +801,8 @@ vrec_set_input_fragment(V_RECSTREAM *vstrm)
 static bool
 vrec_get_input_bytes(V_RECSTREAM *vstrm, char *addr, int len)
 {
+    /* TODO: implement */
+    abort();
 
     return (FALSE);
 }
