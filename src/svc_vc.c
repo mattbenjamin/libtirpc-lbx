@@ -449,13 +449,13 @@ makefd_xprt(int fd, u_int sendsz, u_int recvsz)
     cd->strm_stat = XPRT_IDLE;
 
     /* parallel send/recv */
-    xdr_vrec_create(&(cd->xdrs_in), sendsz, recvsz, xprt,
-                    readv_vc, NULL,
-                    XDR_VREC_INREC);
+    xdr_vrec_create(&(cd->xdrs_in),
+                    XDR_VREC_INREC, xprt, readv_vc, NULL, recvsz,
+                    VREC_FLAG_NONE);
 
-    xdr_vrec_create(&(cd->xdrs_out), sendsz, recvsz, xprt,
-                    NULL, writev_vc,
-                    XDR_VREC_OUTREC);
+    xdr_vrec_create(&(cd->xdrs_out),
+                    XDR_VREC_OUTREC, xprt, NULL, writev_vc, sendsz,
+                    VREC_FLAG_NONE);
 
     xprt->xp_p1 = cd;
     xprt->xp_auth = NULL;
@@ -522,7 +522,7 @@ again:
         return (FALSE);
     }
     /*
-     * make a new transporter (re-uses xprt)
+     * make a new transport (re-uses xprt)
      */
     newxprt = makefd_xprt(sock, r->sendsize, r->recvsize);
     if (! newxprt)
@@ -630,10 +630,8 @@ __svc_vc_dodestroy(SVCXPRT *xprt)
         mem_free(xprt->xp_rtaddr.buf, xprt->xp_rtaddr.maxlen);
     if (xprt->xp_ltaddr.buf)
         mem_free(xprt->xp_ltaddr.buf, xprt->xp_ltaddr.maxlen);
-
     if (xprt->xp_tp)
         mem_free(xprt->xp_tp, 0);
-
     if (xprt->xp_netid)
         mem_free(xprt->xp_netid, 0);
 
@@ -919,7 +917,7 @@ readv_vc(void *xprtp, struct iovec *iov, int iovcnt, u_int flags)
     cd = (struct cf_conn *)xprt->xp_p1;
 
     /* support readahead */
-    if (flags & VREC_O_NONBLOCK) {
+    if (flags & VREC_FLAG_NONBLOCK) {
         if (! cd->nonblock) {
             fflags = fcntl(xprt->xp_fd, F_GETFL, 0);
             if (fflags == -1)
@@ -1604,13 +1602,13 @@ SVCXPRT *svc_vc_create_xprt(u_long sendsz, u_long recvsz)
     cd->strm_stat = XPRT_IDLE;
 
     /* parallel send/recv */
-    xdr_vrec_create(&(cd->xdrs_in), sendsz, recvsz, xprt,
-                    readv_vc, NULL,
-                    XDR_VREC_INREC);
+    xdr_vrec_create(&(cd->xdrs_in),
+                    XDR_VREC_INREC, xprt, readv_vc, NULL, recvsz,
+                    VREC_FLAG_NONE);
 
-    xdr_vrec_create(&(cd->xdrs_out), sendsz, recvsz, xprt,
-                    NULL, writev_vc,
-                    XDR_VREC_OUTREC);
+    xdr_vrec_create(&(cd->xdrs_out),
+                    XDR_VREC_OUTREC, xprt, NULL, writev_vc, sendsz,
+                    VREC_FLAG_NONE);
 
     xprt->xp_p1 = cd;
     xprt->xp_verf.oa_base = cd->verf_body;
