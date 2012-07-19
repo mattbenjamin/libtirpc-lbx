@@ -195,7 +195,7 @@ vrec_nb_readahead(V_RECSTREAM *vstrm)
     iov->iov_base = pos->vrec->base;
     iov->iov_len = 8192; /* LFP */
     nbytes = vstrm->ops.readv(vstrm->vp_handle, iov, 1, VREC_FLAG_NONBLOCK);
-    vstrm->st_u.in.fbtbc += nbytes;
+    vstrm->st_u.in.rbtbc += nbytes;
 
     return (nbytes);
 }
@@ -236,11 +236,9 @@ xdr_vrec_create(XDR *xdrs,
     case XDR_VREC_INREC:
         /* XXX finish */
         vstrm->st_u.in.fbtbc = 0;
-        vstrm->st_u.in.last_frag = TRUE;
+        vstrm->st_u.in.rbtbc = 0;
         vstrm->st_u.in.haveheader = FALSE;
-        vstrm->st_u.in.hdrlen = 0;
-        vstrm->st_u.in.hdrp = NULL;
-        vstrm->st_u.in.received = 0;
+        vstrm->st_u.in.last_frag = TRUE;
         break;
     case XDR_VREC_OUTREC:
         /* XXX finish */
@@ -760,30 +758,6 @@ flush_out(V_RECSTREAM *rstrm, bool eor)
         return (FALSE);
     rstrm->frag_header = (u_int32_t *)(void *)rstrm->out_base;
     rstrm->out_finger = (char *)rstrm->out_base + sizeof(u_int32_t);
-    return (TRUE);
-#else
-    abort();
-    return (FALSE);
-#endif /* 0 */
-}
-
-static bool  /* knows nothing about records!  Only about input buffers */
-fill_input_buf(V_RECSTREAM *rstrm)
-{
-#if 0 /* XXX */
-    char *where;
-    u_int32_t i;
-    int len;
-
-    where = rstrm->in_base;
-    i = (u_int32_t)((u_long)rstrm->in_boundry % BYTES_PER_XDR_UNIT);
-    where += i;
-    len = (u_int32_t)(rstrm->in_size - i);
-    if ((len = (*(rstrm->readit))(rstrm->tcp_handle, where, len)) == -1)
-        return (FALSE);
-    rstrm->in_finger = where;
-    where += len;
-    rstrm->in_boundry = where;
     return (TRUE);
 #else
     abort();

@@ -108,14 +108,12 @@ struct v_rec_strm
     /* stream state */
     union {
         struct {
+            struct iovec iovsink[4];
             long fbtbc; /* fragment bytes to be consumed */
+            long rbtbc; /* readahead bytes to be consumed */
             u_int32_t header;
-            char *hdrp;
-            int hdrlen;
-            int received;
             bool last_frag;
             bool haveheader;
-            struct iovec iovsink[4];
         } in;
         struct {
             bool frag_sent;
