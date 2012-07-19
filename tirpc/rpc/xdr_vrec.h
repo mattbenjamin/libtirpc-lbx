@@ -58,7 +58,6 @@ struct v_rec_pos_t
 };
 
 #define VREC_QFLAG_NONE      0x0000
-#define VREC_QFLAG_VOLATILE  0x0001 /* unreclaimable segments */
 
 struct v_rec_queue
 {
