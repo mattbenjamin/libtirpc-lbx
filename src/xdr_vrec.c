@@ -83,9 +83,9 @@ static const struct  xdr_ops xdr_vrec_ops = {
 static u_int fix_buf_size(u_int);
 static bool flush_out(V_RECSTREAM *, bool);
 static bool fill_input_buf(V_RECSTREAM *);
-static bool get_input_bytes(V_RECSTREAM *, char *, int);
-static bool set_input_fragment(V_RECSTREAM *);
-static bool skip_input_bytes(V_RECSTREAM *, long);
+static bool vrec_get_input_fragment_bytes(V_RECSTREAM *, char **, int);
+static bool vrec_set_input_fragment(V_RECSTREAM *);
+static bool vrec_skip_input_bytes(V_RECSTREAM *, long);
 
 /* XXX might not be faster than jemalloc, &c? */
 static inline void
@@ -182,23 +182,24 @@ static inline void vrec_append_rec(struct v_rec_queue *q, struct v_rec *vrec)
 }
 
 static inline size_t
-vrec_nb_readahead(V_RECSTREAM *vstrm)
+vrec_readahead_bytes(V_RECSTREAM *vstrm, int len, u_int flags)
 {
     struct v_rec_pos_t *pos;
     struct iovec iov[1];
     uint32_t nbytes;
 
-    /* XXX it's better to read into WRITE data, than force
-     * lots of tiny reads (as xdrrec seems to) */
-
     pos = vrec_fpos(vstrm);
-    iov->iov_base = pos->vrec->base;
-    iov->iov_len = 8192; /* LFP */
+    iov->iov_base = pos->vrec->base + pos->vrec->off;
+    iov->iov_len = len;
     nbytes = vstrm->ops.readv(vstrm->vp_handle, iov, 1, VREC_FLAG_NONBLOCK);
     vstrm->st_u.in.rbtbc += nbytes;
+    pos->vrec->len += nbytes;
 
     return (nbytes);
 }
+
+#define vrec_nb_readahead(vstrm) \
+    vrec_readahead_bytes((vstrm), 1300, VREC_FLAG_NONBLOCK);
 
 /*
  * Create an xdr handle
@@ -258,34 +259,26 @@ xdr_vrec_create(XDR *xdrs,
 
 /*
  * The routines defined below are the xdr ops which will go into the
- * xdr handle filled in by xdrrec_create.
+ * xdr handle filled in by xdr_vrec_create.
  */
-
 static bool
 xdr_vrec_getlong(XDR *xdrs,  long *lp)
 {
-#if 0 /* XXX */
-    RECSTREAM *rstrm = (RECSTREAM *)(xdrs->x_private);
-    int32_t *buflp = (int32_t *)(void *)(rstrm->in_finger);
-    int32_t mylong;
+    V_RECSTREAM *vstrm = (V_RECSTREAM *)xdrs->x_private;
+    int32_t *buf = NULL;
 
     /* first try the inline, fast case */
-    if ((rstrm->fbtbc >= sizeof(int32_t)) &&
-        (((long)rstrm->in_boundry - (long)buflp) >= sizeof(int32_t))) {
-        *lp = (long)ntohl((u_int32_t)(*buflp));
-        rstrm->fbtbc -= sizeof(int32_t);
-        rstrm->in_finger += sizeof(int32_t);
+    if (vstrm->st_u.in.fbtbc >= sizeof(int32_t)) {
+        struct v_rec_pos_t *pos = vrec_lpos(vstrm);
+        buf = (int32_t *)(void *)(pos->vrec->base + pos->boff);
+        *lp = (long)ntohl(*buf);
     } else {
-        if (! xdrrec_getbytes(xdrs, (char *)(void *)&mylong,
-                              sizeof(int32_t)))
+        if (! xdr_vrec_getbytes(
+                xdrs, (char *)(void *)buf, sizeof(int32_t)))
             return (FALSE);
-        *lp = (long)ntohl((u_int32_t)mylong);
+        *lp = (long)ntohl(*buf);
     }
     return (TRUE);
-#else
-    abort();
-    return (FALSE);
-#endif /* 0 */
 }
 
 static bool
@@ -619,7 +612,8 @@ vrec_truncate_input_q(V_RECSTREAM *vstrm, int max)
     if (unlikely(vstrm->ioq.size == 0)) {
         /* XXX wrap? */
         vrec = vrec_get_vrec(vstrm);
-        vrec->base = vrec_alloc_buffer(vstrm->def_bsize);
+        vrec->size = vstrm->def_bsize;
+        vrec->base = vrec_alloc_buffer(vrec->size);
         vrec->flags = VREC_FLAG_RECLAIM;
         vrec_append_rec(&vstrm->ioq, vrec);
         (vstrm->ioq.size)++;
@@ -634,8 +628,8 @@ vrec_truncate_input_q(V_RECSTREAM *vstrm, int max)
 
     /* XXX improve */
     pos->vrec = vrec;
-    pos->loff = 0; /* XXX */
-    pos->bpos = 0;
+    pos->loff = 0;
+    pos->bpos = 1; /* first position */
     pos->boff = 0;
 
     return;
@@ -655,13 +649,14 @@ xdr_vrec_skiprecord(XDR *xdrs)
         switch (xdrs->x_op) {
         case XDR_DECODE:
             while (vstrm->st_u.in.fbtbc > 0 || (! vstrm->st_u.in.last_frag)) {
-                if (! skip_input_bytes(vstrm, vstrm->st_u.in.fbtbc))
+                if (! vrec_skip_input_bytes(vstrm, vstrm->st_u.in.fbtbc))
                     return (FALSE);
                 /* bound queue size and support future mapped reads */
                 vrec_truncate_input_q(vstrm, 8);
                 vstrm->st_u.in.fbtbc = 0;
+                vstrm->st_u.in.rbtbc = 0;
                 if ((! vstrm->st_u.in.last_frag) &&
-                    (! set_input_fragment(vstrm)))
+                    (! vrec_set_input_fragment(vstrm)))
                     return (FALSE);
             }
             vstrm->st_u.in.last_frag = FALSE;
@@ -765,41 +760,40 @@ flush_out(V_RECSTREAM *rstrm, bool eor)
 #endif /* 0 */
 }
 
-static bool  /* knows nothing about records!  Only about input buffers */
-get_input_bytes(V_RECSTREAM *rstrm, char *addr, int len)
+/* Stream read operation intended for small, e.g., header-length
+ * reads ONLY.  Note:  len is required to be less than the queue
+ * default buffer size. */
+static bool
+vrec_get_input_fragment_bytes(V_RECSTREAM *vstrm, char **addr, int len)
 {
-#if 0 /* XXX */
-    size_t current;
+    struct v_rec_pos_t *pos;
+    size_t nbytes;
 
-    while (len > 0) {
-        current = (size_t)((long)rstrm->in_boundry -
-                           (long)rstrm->in_finger);
-        if (current == 0) {
-            if (! fill_input_buf(rstrm))
-                return (FALSE);
-            continue;
+    if (! vstrm->st_u.in.rbtbc) {
+        vrec_nb_readahead(vstrm);
+        if (len > vstrm->st_u.in.rbtbc) {
+            vrec_readahead_bytes(vstrm, vstrm->st_u.in.rbtbc - len,
+                                 VREC_FLAG_NONE);
         }
-        current = (len < current) ? len : current;
-        memmove(addr, rstrm->in_finger, current);
-        rstrm->in_finger += current;
-        addr += current;
-        len -= current;
+        if (len <= vstrm->st_u.in.rbtbc) {
+            pos = vrec_fpos(vstrm);
+            *addr = (void *)(pos->vrec->base + pos->boff);
+            pos->boff += len;
+            return (TRUE);
+        }
     }
-    return (TRUE);
-#else
-    abort();
     return (FALSE);
-#endif /* 0 */
 }
 
 static bool  /* next two bytes of the input stream are treated as a header */
-set_input_fragment(V_RECSTREAM *vstrm)
+vrec_set_input_fragment(V_RECSTREAM *vstrm)
 {
     u_int32_t header;
+    char *addr;
 
-    if (! get_input_bytes(vstrm, (char *)(void *)&header, sizeof(header)))
+    if (! vrec_get_input_fragment_bytes(vstrm, &addr, sizeof(header)))
         return (FALSE);
-    header = ntohl(header);
+    header = ntohl(*((u_int32_t *)addr));
     vstrm->st_u.in.last_frag = ((header & LAST_FRAG) == 0) ? FALSE : TRUE;
     /*
      * Sanity check. Try not to accept wildly incorrect
@@ -817,7 +811,7 @@ set_input_fragment(V_RECSTREAM *vstrm)
 
 /* Consume and discard cnt bytes from the input stream. */
 static bool
-skip_input_bytes(V_RECSTREAM *vstrm, long cnt)
+vrec_skip_input_bytes(V_RECSTREAM *vstrm, long cnt)
 {
     int ix;
     u_int32_t nbytes, resid;
@@ -829,8 +823,9 @@ skip_input_bytes(V_RECSTREAM *vstrm, long cnt)
             iov->iov_len = MIN(resid, vstrm->def_bsize);
             resid -= iov->iov_len;
         }
-        nbytes = vstrm->ops.readv(vstrm->vp_handle, &(vstrm->st_u.in.iovsink),
-                                  4 /* iovcnt */, VREC_FLAG_NONE);
+        nbytes = vstrm->ops.readv(
+            vstrm->vp_handle, (struct iovec *) &(vstrm->st_u.in.iovsink),
+            4 /* iovcnt */, VREC_FLAG_NONE);
         cnt -= nbytes;
     }
     return (TRUE);

@@ -37,6 +37,7 @@ struct v_rec
     void *u_1; /* user data */
     u_int off;
     u_int len;
+    u_int size;
     u_int flags;
 };
 
