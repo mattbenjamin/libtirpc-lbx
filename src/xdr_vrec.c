@@ -159,6 +159,18 @@ init_sink_buffers(V_RECSTREAM *vstrm)
     }
 }
 
+static inline void
+free_sink_buffers(V_RECSTREAM *vstrm)
+{
+    int ix;
+    struct iovec *iov;
+
+    for (ix = 0; ix < 4; ix++) {
+        iov = &(vstrm->st_u.in.iovsink[ix]);
+        vrec_free_buffer(iov->iov_base);
+    }
+}
+
 #define vrec_qlen(q) ((q)->size)
 #define vrec_fpos(vstrm) (&vstrm->ioq.fpos)
 #define vrec_lpos(vstrm) (&vstrm->ioq.lpos)
@@ -514,7 +526,7 @@ xdr_vrec_destroy(XDR *xdrs)
         opr_queue_Remove(&vrec->ioq);
         (vstrm->ioq.size)--;
     }
-
+    free_sink_buffers(vstrm);
     mem_free(vstrm, sizeof(V_RECSTREAM));
 }
 
