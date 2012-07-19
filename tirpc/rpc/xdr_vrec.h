@@ -112,20 +112,15 @@ struct v_rec_strm
             u_int32_t header;
             char *hdrp;
             int hdrlen;
-            int reclen;
             int received;
             bool last_frag;
             bool haveheader;
+            struct iovec iovsink[4];
         } in;
         struct {
             bool frag_sent;
         } out;
     } st_u;
-
-    bool nonblock; /* always FALSE */
-
-    /* data sink (discarding data) */
-    struct iovec sink;
 
     /* free lists */
     struct vrec_prealloc prealloc;

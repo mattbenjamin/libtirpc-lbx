@@ -146,23 +146,22 @@ vrec_put_vrec(V_RECSTREAM *vstrm, struct v_rec *vrec)
 #endif /* 0 */
 #define vrec_free_buffer(addr) mem_free((addr), 0)
 
+static inline void
+init_sink_buffers(V_RECSTREAM *vstrm)
+{
+    int ix;
+    struct iovec *iov;
+
+    for (ix = 0; ix < 4; ix++) {
+        iov = &(vstrm->st_u.in.iovsink[ix]);
+        iov->iov_base = vrec_alloc_buffer(vstrm->def_bsize);
+        iov->iov_len = 0;
+    }
+}
+
 #define vrec_qlen(q) ((q)->size)
 #define vrec_fpos(vstrm) (&vstrm->ioq.fpos)
 #define vrec_lpos(vstrm) (&vstrm->ioq.lpos)
-
-static inline void
-vrec_unrelq(V_RECSTREAM *vstrm, struct v_rec *vrec)
-{
-    (vrec->refcnt)--;
-    opr_queue_Remove(&vrec->ioq);
-    /* XXX likely because I think the common usage will be for the consumer
-     * to call x_putbytes,RELE followed by skiprecord */
-    if (likely(vrec->refcnt == 0)) {
-        /* we know vrec is on relq */
-        opr_queue_Remove(&vrec->relq);
-        vrec_put_vrec(vstrm, vrec);
-    }
-}
 
 static inline void
 vrec_rele(V_RECSTREAM *vstrm, struct v_rec *vrec)
@@ -241,7 +240,6 @@ xdr_vrec_create(XDR *xdrs,
         vstrm->st_u.in.haveheader = FALSE;
         vstrm->st_u.in.hdrlen = 0;
         vstrm->st_u.in.hdrp = NULL;
-        vstrm->st_u.in.reclen = 0;
         vstrm->st_u.in.received = 0;
         break;
     case XDR_VREC_OUTREC:
@@ -254,6 +252,7 @@ xdr_vrec_create(XDR *xdrs,
     }
 
     init_prealloc_queues(vstrm);
+    init_sink_buffers(vstrm);
 
     return;
 }
@@ -657,8 +656,17 @@ xdr_vrec_skiprecord(XDR *xdrs)
     case XDR_VREC_INREC:
         switch (xdrs->x_op) {
         case XDR_DECODE:
-            vrec_truncate_input_q(vstrm, 8);
-            vrec_nb_readahead(vstrm);
+            while (vstrm->st_u.in.fbtbc > 0 || (! vstrm->st_u.in.last_frag)) {
+                if (! skip_input_bytes(vstrm, vstrm->st_u.in.fbtbc))
+                    return (FALSE);
+                /* bound queue size and support future mapped reads */
+                vrec_truncate_input_q(vstrm, 8);
+                vstrm->st_u.in.fbtbc = 0;
+                if ((! vstrm->st_u.in.last_frag) &&
+                    (! set_input_fragment(vstrm)))
+                    return (FALSE);
+            }
+            vstrm->st_u.in.last_frag = FALSE;
             break;
         case XDR_ENCODE:
         default:
@@ -833,29 +841,25 @@ set_input_fragment(V_RECSTREAM *vstrm)
     return (TRUE);
 }
 
-static bool  /* consumes input bytes; knows nothing about records! */
-skip_input_bytes(V_RECSTREAM *rstrm, long cnt)
+/* Consume and discard cnt bytes from the input stream. */
+static bool
+skip_input_bytes(V_RECSTREAM *vstrm, long cnt)
 {
-#if 0 /* XXX */
-    u_int32_t current;
+    int ix;
+    u_int32_t nbytes, resid;
+    struct iovec *iov;
 
     while (cnt > 0) {
-        current = (size_t)((long)rstrm->in_boundry -
-                           (long)rstrm->in_finger);
-        if (current == 0) {
-            if (! fill_input_buf(rstrm))
-                return (FALSE);
-            continue;
+        for (ix = 0, resid = cnt; ((resid > 0) && (ix < 4)); ++ix) {
+            iov = &(vstrm->st_u.in.iovsink[ix]);
+            iov->iov_len = MIN(resid, vstrm->def_bsize);
+            resid -= iov->iov_len;
         }
-        current = (u_int32_t)((cnt < current) ? cnt : current);
-        rstrm->in_finger += current;
-        cnt -= current;
+        nbytes = vstrm->ops.readv(vstrm->vp_handle, &(vstrm->st_u.in.iovsink),
+                                  4 /* iovcnt */, VREC_FLAG_NONE);
+        cnt -= nbytes;
     }
     return (TRUE);
-#else
-    abort();
-    return (FALSE);
-#endif /* 0 */
 }
 
 static u_int
