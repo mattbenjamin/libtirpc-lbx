@@ -147,7 +147,7 @@ vrec_put_vrec(V_RECSTREAM *vstrm, struct v_rec *vrec)
 #define vrec_free_buffer(addr) mem_free((addr), 0)
 
 static inline void
-init_sink_buffers(V_RECSTREAM *vstrm)
+init_discard_buffers(V_RECSTREAM *vstrm)
 {
     int ix;
     struct iovec *iov;
@@ -160,7 +160,7 @@ init_sink_buffers(V_RECSTREAM *vstrm)
 }
 
 static inline void
-free_sink_buffers(V_RECSTREAM *vstrm)
+free_discard_buffers(V_RECSTREAM *vstrm)
 {
     int ix;
     struct iovec *iov;
@@ -185,6 +185,7 @@ static inline void
 vrec_init_ioq(V_RECSTREAM *vstrm)
 {
     struct v_rec *vrec;
+    struct v_rec_pos_t *pos;
 
     vrec = vrec_get_vrec(vstrm);
     vrec->size = vstrm->def_bsize;
@@ -225,7 +226,66 @@ vrec_readahead_bytes(V_RECSTREAM *vstrm, int len, u_int flags)
 }
 
 #define vrec_nb_readahead(vstrm) \
-    vrec_readahead_bytes((vstrm), 1300, VREC_FLAG_NONBLOCK);
+    vrec_readahead_bytes((vstrm), (vstrm)->st_u.in.readahead_bytes, \
+                         VREC_FLAG_NONBLOCK);
+
+enum vrec_cursor
+{
+    VREC_FPOS,
+    VREC_LPOS,
+    VREC_RESET_POS
+};
+
+/*
+ * Set initial read/insert or fill position.
+ */
+static inline void
+vrec_stream_reset(V_RECSTREAM *vstrm, enum vrec_cursor wh_pos)
+{
+    struct v_rec_pos_t *pos;
+    struct v_rec *vrec;
+
+    vrec = opr_queue_First(&vstrm->ioq.q, struct v_rec, ioq);
+
+    switch (wh_pos) {
+    case VREC_FPOS:
+        pos = vrec_fpos(vstrm);
+        break;
+    case VREC_LPOS:
+        pos = vrec_lpos(vstrm);
+        break;
+    case VREC_RESET_POS:
+        vrec_stream_reset(vstrm, VREC_FPOS);
+        vrec_stream_reset(vstrm, VREC_LPOS);
+        return;
+        break;
+    default:
+        abort();
+        break;
+    }
+
+    pos->vrec = vrec;
+    pos->loff = 0;
+    pos->bpos = 1; /* first position */
+    pos->boff = 0;
+}
+
+/*
+ * Advance read/insert or fill position.
+ */
+static inline void
+vrec_next(V_RECSTREAM *vstrm, enum vrec_cursor wh_pos, u_int flags)
+{
+    switch (wh_pos) {
+    case VREC_FPOS:
+        break;
+    case VREC_LPOS:
+        break;
+    default:
+        abort();
+        break;
+    }
+}
 
 /*
  * Create an xdr handle
@@ -278,7 +338,7 @@ xdr_vrec_create(XDR *xdrs,
     }
 
     init_prealloc_queues(vstrm);
-    init_sink_buffers(vstrm);
+    init_discard_buffers(vstrm);
 
     return;
 }
@@ -541,7 +601,7 @@ xdr_vrec_destroy(XDR *xdrs)
         opr_queue_Remove(&vrec->ioq);
         (vstrm->ioq.size)--;
     }
-    free_sink_buffers(vstrm);
+    free_discard_buffers(vstrm);
     mem_free(vstrm, sizeof(V_RECSTREAM));
 }
 
@@ -552,7 +612,6 @@ xdr_vrec_destroy(XDR *xdrs)
 static inline void
 vrec_truncate_input_q(V_RECSTREAM *vstrm, int max)
 {
-    struct v_rec_pos_t *pos;
     struct v_rec *vrec;
 
     /* the ioq queue can contain shared and special segments (eg, mapped
@@ -595,19 +654,9 @@ vrec_truncate_input_q(V_RECSTREAM *vstrm, int max)
     /* ideally, the first read on the stream */
     if (unlikely(vstrm->ioq.size == 0))
         vrec_init_ioq(vstrm);
-    else
-        vrec = opr_queue_First(&vstrm->ioq.q, struct v_rec, ioq);
 
     /* stream reset */
-    vrec->off = 0;
-    vrec->len = 0;
-
-    /* fpos is a fill pointer for the buffer queue */
-    pos = vrec_fpos(vstrm);
-    pos->vrec = vrec;
-    pos->loff = 0;
-    pos->bpos = 1; /* first position */
-    pos->boff = 0;
+    vrec_stream_reset(vstrm, VREC_RESET_POS);
 
     return;
 }
