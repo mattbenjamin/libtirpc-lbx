@@ -80,7 +80,7 @@ static const struct  xdr_ops xdr_vrec_ops = {
 #define LAST_FRAG ((u_int32_t)(1 << 31))
 
 static u_int fix_buf_size(u_int);
-static bool flush_out(V_RECSTREAM *, bool);
+static bool vrec_flush_out(V_RECSTREAM *, bool);
 static bool fill_input_buf(V_RECSTREAM *);
 static bool vrec_get_input_bytes(V_RECSTREAM *, char *, int);
 static bool vrec_get_input_fragment_bytes(V_RECSTREAM *, char **, int);
@@ -174,6 +174,7 @@ free_discard_buffers(V_RECSTREAM *vstrm)
 #define vrec_qlen(q) ((q)->size)
 #define vrec_fpos(vstrm) (&vstrm->ioq.fpos)
 #define vrec_lpos(vstrm) (&vstrm->ioq.lpos)
+
 
 static inline void vrec_append_rec(struct v_rec_queue *q, struct v_rec *vrec)
 {
@@ -575,7 +576,7 @@ xdr_vrec_setpos(XDR *xdrs, u_int pos)
 
     ix = 0;
     for (opr_queue_Scan(&(vstrm->ioq.q), qiter)) {
-        vrec = opr_queue_Entry(&vstrm->ioq.q, struct v_rec, ioq);
+        vrec = opr_queue_Entry(qiter, struct v_rec, ioq);
         if ((vrec->len + resid) > pos) {
             lpos->vrec = vrec;
             lpos->bpos = ix;
@@ -757,54 +758,68 @@ xdr_vrec_eof(XDR *xdrs)
  * pipelined procedure calls.)  TRUE => immmediate flush to tcp connection.
  */
 bool
-xdr_vrec_endofrecord(XDR *xdrs, bool sendnow)
+xdr_vrec_endofrecord(XDR *xdrs, bool flush)
 {
-#if 0 /* XXX */
-    RECSTREAM *rstrm = (RECSTREAM *)(xdrs->x_private);
-    u_long len;  /* fragment length */
+    V_RECSTREAM *vstrm = (V_RECSTREAM *)(xdrs->x_private);
+    struct v_rec *vrec;
 
-    if (sendnow || rstrm->frag_sent ||
-        ((u_long)rstrm->out_finger + sizeof(u_int32_t) >=
-         (u_long)rstrm->out_boundry)) {
-        rstrm->frag_sent = FALSE;
-        return (flush_out(rstrm, TRUE));
+    /* flush, resetting stream (sends LAST_FRAG) */
+    if (flush || vstrm->st_u.out.frag_sent) {
+        vstrm->st_u.out.frag_sent = FALSE;
+        return (vrec_flush_out(vstrm, TRUE));
     }
-    len = (u_long)(rstrm->out_finger) - (u_long)(rstrm->frag_header) -
-        sizeof(u_int32_t);
-    *(rstrm->frag_header) = htonl((u_int32_t)len | LAST_FRAG);
-    rstrm->frag_header = (u_int32_t *)(void *)rstrm->out_finger;
-    rstrm->out_finger += sizeof(u_int32_t);
+
+    /* XXX check */
+    *(vstrm->st_u.out.frag_header) =
+        htonl((u_int32_t)(vstrm->st_u.out.frag_len | LAST_FRAG));
+
+    /* advance fill pointer */
+    if (! vrec_next(vstrm, VREC_FPOS, VREC_FLAG_XTENDQ))
+        return (FALSE);
+
+    vstrm->st_u.out.frag_header = vrec->base;
+    vrec->off = sizeof(u_int32_t);
+    vrec->len = sizeof(u_int32_t);
+
     return (TRUE);
-#else
-    abort();
-    return (FALSE);
-#endif /* 0 */
 }
 
 /*
  * Internal useful routines
  */
-static bool
-flush_out(V_RECSTREAM *rstrm, bool eor)
-{
-#if 0 /* XXX */
-    u_int32_t eormask = (eor == TRUE) ? LAST_FRAG : 0;
-    u_int32_t len = (u_int32_t)((u_long)(rstrm->out_finger) -
-                                (u_long)(rstrm->frag_header) - sizeof(u_int32_t));
 
-    *(rstrm->frag_header) = htonl(len | eormask);
-    len = (u_int32_t)((u_long)(rstrm->out_finger) -
-                      (u_long)(rstrm->out_base));
-    if ((*(rstrm->writeit))(rstrm->tcp_handle, rstrm->out_base, (int)len)
-        != (int)len)
-        return (FALSE);
-    rstrm->frag_header = (u_int32_t *)(void *)rstrm->out_base;
-    rstrm->out_finger = (char *)rstrm->out_base + sizeof(u_int32_t);
+#define VREC_NIOVS 8
+
+static bool
+vrec_flush_out(V_RECSTREAM *vstrm, bool eor)
+{
+    u_int32_t eormask = (eor == TRUE) ? LAST_FRAG : 0;
+    struct iovec iov[VREC_NIOVS];
+    struct opr_queue *qiter;
+    struct v_rec *vrec;
+    uint32_t nbytes;
+    int ix;
+
+    /* update fragment header */
+    *(vstrm->st_u.out.frag_header) =
+        htonl((u_int32_t)(vstrm->st_u.out.frag_len | eormask));
+
+    ix = 0;
+    for (opr_queue_Scan(&(vstrm->ioq.q), qiter)) {
+        vrec = opr_queue_Entry(qiter, struct v_rec, ioq);
+        iov[ix].iov_base = vrec->base;
+        iov[ix].iov_len = vrec->len;
+        if (unlikely(
+                (opr_queue_Last(&(vstrm->ioq.q), struct v_rec, ioq)) ||
+                (ix == (VREC_NIOVS-1)))) {
+            /* blocking write */
+            nbytes = vstrm->ops.writev(
+                vstrm->vp_handle, iov, ix+1 /* iovcnt */, VREC_FLAG_NONE);
+        }
+        ++ix;
+    }
+    vrec_truncate_output_q(vstrm, 8);
     return (TRUE);
-#else
-    abort();
-    return (FALSE);
-#endif /* 0 */
 }
 
 /* Stream read operation intended for small, e.g., header-length

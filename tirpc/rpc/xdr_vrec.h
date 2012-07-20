@@ -102,13 +102,15 @@ struct v_rec_strm
             struct iovec iovsink[4];
             long fbtbc; /* fragment bytes to be consumed */
             long rbtbc; /* readahead bytes to be consumed */
-            long readahead_bytes; /* bytes to readahead on leading fragments */
+            long readahead_bytes; /* bytes to read ahead across fragments */
             u_int32_t header;
             bool last_frag;
             bool haveheader;
         } in;
         struct {
-            bool frag_sent;
+            u_int32_t *frag_header; /* beginning of outgoing fragment */
+            u_long frag_len; /* fragment length */
+            bool frag_sent; /* true if buffer sent in middle of record */
         } out;
     } st_u;
 
