@@ -188,6 +188,8 @@ vrec_init_ioq(V_RECSTREAM *vstrm)
     struct v_rec_pos_t *pos;
 
     vrec = vrec_get_vrec(vstrm);
+    vrec->off = 0;
+    vrec->len = 0;
     vrec->size = vstrm->def_bsize;
     vrec->base = vrec_alloc_buffer(vrec->size);
     vrec->flags = VREC_FLAG_RECLAIM;
