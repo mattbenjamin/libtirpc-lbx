@@ -594,11 +594,13 @@ static int32_t *
 xdr_vrec_inline(XDR *xdrs, u_int len)
 {
     V_RECSTREAM *vstrm = (V_RECSTREAM *)xdrs->x_private;
-    struct v_rec_pos_t *pos;
+    struct v_rec_pos_t *pos = vrec_lpos(vstrm);;
     int32_t *buf = NULL;
 
-    /* we keep xdrrec's inline concept intact--encode or decode
-     * bytes in the stream buffer */
+    /* we keep xdrrec's inline concept mostly intact.  the function
+     * returns the address of the current logical offset in the stream
+     * buffer, iff no less than len contiguous bytes are available in
+     * the segment. */
 
     switch (vstrm->direction) {
     case XDR_VREC_IN:
@@ -608,10 +610,11 @@ xdr_vrec_inline(XDR *xdrs, u_int len)
             break;
         case XDR_DECODE:
             if (vstrm->st_u.in.fbtbc >= len) {
-                pos = vrec_lpos(vstrm);
-                buf = (int32_t *)(void *)(pos->vrec->base + pos->boff);
-                vstrm->st_u.in.fbtbc -= len;
-                pos->boff += len;
+                if ((pos->boff + len) <= pos->vrec->size) {
+                    buf = (int32_t *)(void *)(pos->vrec->base + pos->boff);
+                    vstrm->st_u.in.fbtbc -= len;
+                    pos->boff += len;
+                }
             }
             break;
         default:
@@ -622,7 +625,10 @@ xdr_vrec_inline(XDR *xdrs, u_int len)
     case XDR_VREC_OUT:
         switch (xdrs->x_op) {
         case XDR_ENCODE:
-            /* TODO: implement */
+            if ((pos->boff + len) <= pos->vrec->size) {
+                buf = (int32_t *)(void *)(pos->vrec->base + pos->boff);
+                pos->boff += len;
+            }
             break;
         case XDR_DECODE:
         default:
