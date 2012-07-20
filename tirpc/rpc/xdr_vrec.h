@@ -33,19 +33,10 @@ struct v_rec
     struct opr_queue relq;
     uint32_t refcnt;
     void *base;
-    void *p_1; /* private data */
-    void *u_1; /* user data */
     u_int off;
     u_int len;
     u_int size;
     u_int flags;
-};
-
-#define VQBUFSZ 16384
-struct v_rec_buf
-{
-    struct opr_queue q;
-    void *buf;
 };
 
 #define VQSIZE 64
@@ -78,8 +69,8 @@ struct vrec_prealloc
 
 /* streams are unidirectional */
 enum xdr_vrec_direction {
-    XDR_VREC_INREC,
-    XDR_VREC_OUTREC,
+    XDR_VREC_IN,
+    XDR_VREC_OUT,
 };
 
 struct v_rec_strm
@@ -134,6 +125,7 @@ typedef struct v_rec_strm V_RECSTREAM;
 #define VREC_FLAG_RECLAIM       0x0002
 #define VREC_FLAG_BUFQ          0x0004
 #define VREC_FLAG_RELQ          0x0008
+#define VREC_FLAG_XTENDQ        0x0010
 
 /* vector equivalents */
 

@@ -184,14 +184,12 @@ static inline void vrec_append_rec(struct v_rec_queue *q, struct v_rec *vrec)
 static inline void
 vrec_init_ioq(V_RECSTREAM *vstrm)
 {
-    struct v_rec *vrec;
-    struct v_rec_pos_t *pos;
-
-    vrec = vrec_get_vrec(vstrm);
-    vrec->off = 0;
-    vrec->len = 0;
+    struct v_rec *vrec = vrec_get_vrec(vstrm);
+    vrec->refcnt = 0;
     vrec->size = vstrm->def_bsize;
     vrec->base = vrec_alloc_buffer(vrec->size);
+    vrec->off = 0;
+    vrec->len = 0;
     vrec->flags = VREC_FLAG_RECLAIM;
     vrec_append_rec(&vstrm->ioq, vrec);
     (vstrm->ioq.size)++;
@@ -272,12 +270,69 @@ vrec_stream_reset(V_RECSTREAM *vstrm, enum vrec_cursor wh_pos)
     pos->boff = 0;
 }
 
+static inline void
+vrec_truncate_input_q(V_RECSTREAM *vstrm, int max)
+{
+    struct v_rec *vrec;
+
+    /* the ioq queue can contain shared and special segments (eg, mapped
+     * buffers).  if present, these segements will also be threaded on
+     * a release (sub) queue.
+     *
+     * we are truncating a recv queue.  if any special segments are
+     * present, we must detach them.
+     */
+    while (unlikely(! opr_queue_IsEmpty(&vstrm->relq.q))) {
+        vrec = opr_queue_First(&vstrm->relq.q, struct v_rec, relq);
+        /* dequeue segment */
+        opr_queue_Remove(&vrec->ioq);
+        (vstrm->ioq.size)--;
+        /* decref */
+        (vrec->refcnt)--;
+        /* vrec should be ref'd elsewhere (it was special) */
+        if (unlikely(vrec->refcnt == 0)) {
+            opr_queue_Remove(&vrec->relq);
+            (vstrm->relq.size)--;
+            if (unlikely(vrec->flags & VREC_FLAG_RECLAIM)) {
+                vrec_free_buffer(vrec->base);
+            }
+            /* recycle it */
+            vrec_put_vrec(vstrm, vrec);
+        }
+    }
+
+    /* any segment left in ioq is a network buffer.  enforce upper
+     * bound on ioq size.
+     */
+    while (unlikely(vstrm->ioq.size > max)) {
+        vrec = opr_queue_Last(&vstrm->ioq.q, struct v_rec, ioq);
+        opr_queue_Remove(&vrec->ioq);
+        (vstrm->ioq.size)--;
+        /* almost certainly recycles */
+        vrec_rele(vstrm, vrec);
+    }
+
+    /* ideally, the first read on the stream */
+    if (unlikely(vstrm->ioq.size == 0))
+        vrec_init_ioq(vstrm);
+
+    /* stream reset */
+    vrec_stream_reset(vstrm, VREC_RESET_POS);
+
+    return;
+}
+
+#define vrec_truncate_output_q vrec_truncate_input_q
+
 /*
  * Advance read/insert or fill position.
  */
-static inline void
+static inline bool
 vrec_next(V_RECSTREAM *vstrm, enum vrec_cursor wh_pos, u_int flags)
 {
+    /* TODO: implement! */
+    abort();
+
     switch (wh_pos) {
     case VREC_FPOS:
         break;
@@ -287,6 +342,7 @@ vrec_next(V_RECSTREAM *vstrm, enum vrec_cursor wh_pos, u_int flags)
         abort();
         break;
     }
+    return (TRUE);
 }
 
 /*
@@ -310,6 +366,7 @@ xdr_vrec_create(XDR *xdrs,
     xdrs->x_ops = &xdr_vrec_ops;
     xdrs->x_private = vstrm;
 
+    vstrm->direction = direction;
     vstrm->vp_handle = xhandle;
 
     /* init queues */
@@ -320,7 +377,7 @@ xdr_vrec_create(XDR *xdrs,
     vstrm->def_bsize = def_bsize;
 
     switch (direction) {
-    case XDR_VREC_INREC:
+    case XDR_VREC_IN:
         vstrm->ops.readv = xreadv;
         vstrm->st_u.in.readahead_bytes = 1200; /* XXX PMTU? */
         vstrm->st_u.in.fbtbc = 0;
@@ -328,9 +385,11 @@ xdr_vrec_create(XDR *xdrs,
         vstrm->st_u.in.haveheader = FALSE;
         vstrm->st_u.in.last_frag = TRUE;
         break;
-    case XDR_VREC_OUTREC:
+    case XDR_VREC_OUT:
         vstrm->ops.writev = xwritev;
         vrec_init_ioq(vstrm);
+        vrec_truncate_output_q(vstrm, 8);
+
         /* XXX finish */
         vstrm->st_u.out.frag_sent = FALSE;
         break;
@@ -372,28 +431,22 @@ xdr_vrec_getlong(XDR *xdrs,  long *lp)
 static bool
 xdr_vrec_putlong(XDR *xdrs, const long *lp)
 {
-#if 0 /* XXX */
-    RECSTREAM *rstrm = (RECSTREAM *)(xdrs->x_private);
-    int32_t *dest_lp = ((int32_t *)(void *)(rstrm->out_finger));
+    V_RECSTREAM *vstrm = (V_RECSTREAM *)xdrs->x_private;
+    struct v_rec_pos_t *pos;
 
-    if ((rstrm->out_finger += sizeof(int32_t)) > rstrm->out_boundry) {
-        /*
-         * this case should almost never happen so the code is
-         * inefficient
-         */
-        rstrm->out_finger -= sizeof(int32_t);
-        rstrm->frag_sent = TRUE;
-        if (! flush_out(rstrm, FALSE))
+    pos = vrec_fpos(vstrm);
+    if (unlikely((pos->vrec->size - pos->vrec->len)
+                 < sizeof(int32_t))) {
+        /* advance fill pointer */
+        if (! vrec_next(vstrm, VREC_FPOS, VREC_FLAG_XTENDQ))
             return (FALSE);
-        dest_lp = ((int32_t *)(void *)(rstrm->out_finger));
-        rstrm->out_finger += sizeof(int32_t);
     }
-    *dest_lp = (int32_t)htonl((u_int32_t)(*lp));
+    *((int32_t *)(pos->vrec->base + pos->vrec->off)) =
+        (int32_t)htonl((u_int32_t)(*lp));
+    pos->vrec->off += sizeof(int32_t);
+    pos->boff += sizeof(int32_t);
+
     return (TRUE);
-#else
-    abort();
-    return (FALSE);
-#endif /* 0 */
 }
 
 static bool
@@ -553,7 +606,7 @@ xdr_vrec_inline(XDR *xdrs, u_int len)
      * bytes in the stream buffer */
 
     switch (vstrm->direction) {
-    case XDR_VREC_INREC:
+    case XDR_VREC_IN:
         switch (xdrs->x_op) {
         case XDR_ENCODE:
             abort();
@@ -571,7 +624,7 @@ xdr_vrec_inline(XDR *xdrs, u_int len)
             break;
         }
         break;
-    case XDR_VREC_OUTREC:
+    case XDR_VREC_OUT:
         switch (xdrs->x_op) {
         case XDR_ENCODE:
             /* TODO: implement */
@@ -611,57 +664,6 @@ xdr_vrec_destroy(XDR *xdrs)
 /*
  * Exported routines to manage xdr records
  */
-static inline void
-vrec_truncate_input_q(V_RECSTREAM *vstrm, int max)
-{
-    struct v_rec *vrec;
-
-    /* the ioq queue can contain shared and special segments (eg, mapped
-     * buffers).  if present, these segements will also be threaded on
-     * a release (sub) queue.
-     *
-     * we are truncating a recv queue.  if any special segments are
-     * present, we must detach them.
-     */
-    while (unlikely(! opr_queue_IsEmpty(&vstrm->relq.q))) {
-        vrec = opr_queue_First(&vstrm->relq.q, struct v_rec, relq);
-        /* dequeue segment */
-        opr_queue_Remove(&vrec->ioq);
-        (vstrm->ioq.size)--;
-        /* decref */
-        (vrec->refcnt)--;
-        /* vrec should be ref'd elsewhere (it was special) */
-        if (unlikely(vrec->refcnt == 0)) {
-            opr_queue_Remove(&vrec->relq);
-            (vstrm->relq.size)--;
-            if (unlikely(vrec->flags & VREC_FLAG_RECLAIM)) {
-                vrec_free_buffer(vrec->base);
-            }
-            /* recycle it */
-            vrec_put_vrec(vstrm, vrec);
-        }
-    }
-
-    /* any segment left in ioq is a network buffer.  enforce upper
-     * bound on ioq size.
-     */
-    while (unlikely(vstrm->ioq.size > max)) {
-        vrec = opr_queue_Last(&vstrm->ioq.q, struct v_rec, ioq);
-        opr_queue_Remove(&vrec->ioq);
-        (vstrm->ioq.size)--;
-        /* almost certainly recycles */
-        vrec_rele(vstrm, vrec);
-    }
-
-    /* ideally, the first read on the stream */
-    if (unlikely(vstrm->ioq.size == 0))
-        vrec_init_ioq(vstrm);
-
-    /* stream reset */
-    vrec_stream_reset(vstrm, VREC_RESET_POS);
-
-    return;
-}
 
 /*
  * Before reading (deserializing from the stream), one should always call
@@ -673,7 +675,7 @@ xdr_vrec_skiprecord(XDR *xdrs)
     V_RECSTREAM *vstrm = (V_RECSTREAM *)(xdrs->x_private);
 
     switch (vstrm->direction) {
-    case XDR_VREC_INREC:
+    case XDR_VREC_IN:
         switch (xdrs->x_op) {
         case XDR_DECODE:
             /* stream reset */
@@ -702,7 +704,7 @@ xdr_vrec_skiprecord(XDR *xdrs)
             break;
         }
         break;
-    case XDR_VREC_OUTREC:
+    case XDR_VREC_OUT:
     default:
         abort();
         break;
@@ -722,7 +724,7 @@ xdr_vrec_eof(XDR *xdrs)
     V_RECSTREAM *vstrm = (V_RECSTREAM *)(xdrs->x_private);
 
     switch (vstrm->direction) {
-    case XDR_VREC_INREC:
+    case XDR_VREC_IN:
         switch (xdrs->x_op) {
         case XDR_DECODE:
             /* stream reset */
@@ -746,7 +748,7 @@ xdr_vrec_eof(XDR *xdrs)
             break;
         }
         break;
-    case XDR_VREC_OUTREC:
+    case XDR_VREC_OUT:
     default:
         abort();
         break;

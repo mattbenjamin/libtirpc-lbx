@@ -450,11 +450,11 @@ makefd_xprt(int fd, u_int sendsz, u_int recvsz)
 
     /* parallel send/recv */
     xdr_vrec_create(&(cd->xdrs_in),
-                    XDR_VREC_INREC, xprt, readv_vc, NULL, recvsz,
+                    XDR_VREC_IN, xprt, readv_vc, NULL, recvsz,
                     VREC_FLAG_NONE);
 
     xdr_vrec_create(&(cd->xdrs_out),
-                    XDR_VREC_OUTREC, xprt, NULL, writev_vc, sendsz,
+                    XDR_VREC_OUT, xprt, NULL, writev_vc, sendsz,
                     VREC_FLAG_NONE);
 
     xprt->xp_p1 = cd;
@@ -1603,11 +1603,11 @@ SVCXPRT *svc_vc_create_xprt(u_long sendsz, u_long recvsz)
 
     /* parallel send/recv */
     xdr_vrec_create(&(cd->xdrs_in),
-                    XDR_VREC_INREC, xprt, readv_vc, NULL, recvsz,
+                    XDR_VREC_IN, xprt, readv_vc, NULL, recvsz,
                     VREC_FLAG_NONE);
 
     xdr_vrec_create(&(cd->xdrs_out),
-                    XDR_VREC_OUTREC, xprt, NULL, writev_vc, sendsz,
+                    XDR_VREC_OUT, xprt, NULL, writev_vc, sendsz,
                     VREC_FLAG_NONE);
 
     xprt->xp_p1 = cd;
