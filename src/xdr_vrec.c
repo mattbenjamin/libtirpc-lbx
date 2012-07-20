@@ -881,9 +881,10 @@ vrec_skip_input_bytes(V_RECSTREAM *vstrm, long cnt)
             iov->iov_len = MIN(resid, vstrm->def_bsize);
             resid -= iov->iov_len;
         }
-        nbytes = vstrm->ops.readv(
-            vstrm->vp_handle, (struct iovec *) &(vstrm->st_u.in.iovsink),
-            4 /* iovcnt */, VREC_FLAG_NONE);
+        nbytes = vstrm->ops.readv(vstrm->vp_handle,
+                                  (struct iovec *) &(vstrm->st_u.in.iovsink),
+                                  ix+1 /* iovcnt */,
+                                  VREC_FLAG_NONE);
         cnt -= nbytes;
     }
     return (TRUE);
