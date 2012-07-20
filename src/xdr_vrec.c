@@ -477,31 +477,25 @@ xdr_vrec_getbytes(XDR *xdrs, char *addr, u_int len)
 static bool
 xdr_vrec_putbytes(XDR *xdrs, const char *addr, u_int len)
 {
-#if 0 /* XXX */
-    RECSTREAM *rstrm = (RECSTREAM *)(xdrs->x_private);
-    int current;
+    V_RECSTREAM *vstrm = (V_RECSTREAM *)xdrs->x_private;
+    struct v_rec_pos_t *pos;
+    int delta;
 
     while (len > 0) {
-        current = (int)rstrm->fbtbc;
-        if (current == 0) {
-            if (rstrm->last_frag)
+        pos = vrec_fpos(vstrm);
+        delta = pos->vrec->size - pos->vrec->len;
+        if (unlikely(! delta)) {
+            /* advance fill pointer */
+            if (! vrec_next(vstrm, VREC_FPOS, VREC_FLAG_XTENDQ))
                 return (FALSE);
-            if (! set_input_fragment(rstrm))
-                return (FALSE);
-            continue;
         }
-        current = (len < current) ? len : current;
-        if (! get_input_bytes(rstrm, addr, current))
-            return (FALSE);
-        addr += current;
-        rstrm->fbtbc -= current;
-        len -= current;
+        memcpy((pos->vrec->base + pos->vrec->off), addr, delta);
+        pos->vrec->off += delta;
+        pos->boff += delta;
+        len -= delta;
     }
+
     return (TRUE);
-#else
-    abort();
-    return (FALSE);
-#endif /* 0 */
 }
 
 static bool
