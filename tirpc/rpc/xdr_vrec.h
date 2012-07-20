@@ -102,7 +102,6 @@ struct v_rec_strm
     } ops;
 
     /* stream params */
-    int n_bufs;
     int maxbufs;
     u_int def_bsize; /* def. size of allocated buffers */
 

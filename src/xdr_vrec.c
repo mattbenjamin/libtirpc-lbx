@@ -175,6 +175,25 @@ free_sink_buffers(V_RECSTREAM *vstrm)
 #define vrec_fpos(vstrm) (&vstrm->ioq.fpos)
 #define vrec_lpos(vstrm) (&vstrm->ioq.lpos)
 
+static inline void vrec_append_rec(struct v_rec_queue *q, struct v_rec *vrec)
+{
+    opr_queue_Append(&q->q, &vrec->ioq);
+    (q->size)++;
+}
+
+static inline void
+vrec_init_ioq(V_RECSTREAM *vstrm)
+{
+    struct v_rec *vrec;
+
+    vrec = vrec_get_vrec(vstrm);
+    vrec->size = vstrm->def_bsize;
+    vrec->base = vrec_alloc_buffer(vrec->size);
+    vrec->flags = VREC_FLAG_RECLAIM;
+    vrec_append_rec(&vstrm->ioq, vrec);
+    (vstrm->ioq.size)++;
+}
+
 static inline void
 vrec_rele(V_RECSTREAM *vstrm, struct v_rec *vrec)
 {
@@ -186,11 +205,6 @@ vrec_rele(V_RECSTREAM *vstrm, struct v_rec *vrec)
         /* return to freelist */
         vrec_put_vrec(vstrm, vrec);
     }
-}
-
-static inline void vrec_append_rec(struct v_rec_queue *q, struct v_rec *vrec)
-{
-    opr_queue_Append(&q->q, &vrec->ioq);
 }
 
 static inline size_t
@@ -254,6 +268,7 @@ xdr_vrec_create(XDR *xdrs,
         break;
     case XDR_VREC_OUTREC:
         vstrm->ops.writev = xwritev;
+        vrec_init_ioq(vstrm);
         /* XXX finish */
         vstrm->st_u.out.frag_sent = FALSE;
         break;
@@ -578,15 +593,9 @@ vrec_truncate_input_q(V_RECSTREAM *vstrm, int max)
     }
 
     /* ideally, the first read on the stream */
-    if (unlikely(vstrm->ioq.size == 0)) {
-        /* XXX wrap? */
-        vrec = vrec_get_vrec(vstrm);
-        vrec->size = vstrm->def_bsize;
-        vrec->base = vrec_alloc_buffer(vrec->size);
-        vrec->flags = VREC_FLAG_RECLAIM;
-        vrec_append_rec(&vstrm->ioq, vrec);
-        (vstrm->ioq.size)++;
-    } else
+    if (unlikely(vstrm->ioq.size == 0))
+        vrec_init_ioq(vstrm);
+    else
         vrec = opr_queue_First(&vstrm->ioq.q, struct v_rec, ioq);
 
     /* stream reset */
