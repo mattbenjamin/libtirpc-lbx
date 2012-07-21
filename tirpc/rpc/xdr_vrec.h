@@ -103,12 +103,12 @@ struct v_rec_strm
             long fbtbc; /* fragment bytes to be consumed */
             long rbtbc; /* readahead bytes to be consumed */
             long readahead_bytes; /* bytes to read ahead across fragments */
-            u_int32_t header;
+            u_int32_t frag_header;
             bool last_frag;
             bool haveheader;
         } in;
         struct {
-            u_int32_t *frag_header; /* beginning of outgoing fragment */
+            u_int32_t frag_header; /* beginning of outgoing fragment */
             u_long frag_len; /* fragment length */
             bool frag_sent; /* true if buffer sent in middle of record */
         } out;

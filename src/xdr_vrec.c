@@ -267,7 +267,7 @@ vrec_stream_reset(V_RECSTREAM *vstrm, enum vrec_cursor wh_pos)
 
     pos->vrec = vrec;
     pos->loff = 0;
-    pos->bpos = 1; /* first position */
+    pos->bpos = 0; /* first position */
     pos->boff = 0;
 }
 
@@ -316,6 +316,17 @@ vrec_truncate_input_q(V_RECSTREAM *vstrm, int max)
     /* ideally, the first read on the stream */
     if (unlikely(vstrm->ioq.size == 0))
         vrec_init_ioq(vstrm);
+
+    switch (vstrm->direction) {
+    case XDR_VREC_IN:
+        break;
+    case XDR_VREC_OUT:
+        vstrm->st_u.out.frag_len = 0;
+        break;
+    default:
+        abort();
+        break;
+    }
 
     /* stream reset */
     vrec_stream_reset(vstrm, VREC_RESET_POS);
@@ -442,10 +453,13 @@ xdr_vrec_putlong(XDR *xdrs, const long *lp)
         if (! vrec_next(vstrm, VREC_FPOS, VREC_FLAG_XTENDQ))
             return (FALSE);
     }
+
     *((int32_t *)(pos->vrec->base + pos->vrec->off)) =
         (int32_t)htonl((u_int32_t)(*lp));
+
     pos->vrec->off += sizeof(int32_t);
     pos->boff += sizeof(int32_t);
+    vstrm->st_u.out.frag_len += sizeof(int32_t);
 
     return (TRUE);
 }
@@ -493,6 +507,7 @@ xdr_vrec_putbytes(XDR *xdrs, const char *addr, u_int len)
         memcpy((pos->vrec->base + pos->vrec->off), addr, delta);
         pos->vrec->off += delta;
         pos->boff += delta;
+        vstrm->st_u.out.frag_len += delta;
         len -= delta;
     }
 
@@ -767,7 +782,6 @@ bool
 xdr_vrec_endofrecord(XDR *xdrs, bool flush)
 {
     V_RECSTREAM *vstrm = (V_RECSTREAM *)(xdrs->x_private);
-    struct v_rec *vrec;
 
     /* flush, resetting stream (sends LAST_FRAG) */
     if (flush || vstrm->st_u.out.frag_sent) {
@@ -776,16 +790,12 @@ xdr_vrec_endofrecord(XDR *xdrs, bool flush)
     }
 
     /* XXX check */
-    *(vstrm->st_u.out.frag_header) =
+    vstrm->st_u.out.frag_header = 
         htonl((u_int32_t)(vstrm->st_u.out.frag_len | LAST_FRAG));
 
     /* advance fill pointer */
     if (! vrec_next(vstrm, VREC_FPOS, VREC_FLAG_XTENDQ))
         return (FALSE);
-
-    vstrm->st_u.out.frag_header = vrec->base;
-    vrec->off = sizeof(u_int32_t);
-    vrec->len = sizeof(u_int32_t);
 
     return (TRUE);
 }
@@ -796,6 +806,33 @@ xdr_vrec_endofrecord(XDR *xdrs, bool flush)
 
 #define VREC_NIOVS 8
 
+static inline void
+vrec_flush_segments(V_RECSTREAM *vstrm, struct iovec *iov, int iovcnt, u_int resid)
+{
+    uint32_t nbytes = 0;
+    struct iovec *tiov;
+    int ix;
+
+    while (resid > 0) {
+        /* advance iov */
+        for (ix = 0; nbytes > 0, ix < iovcnt; ++ix) {
+            tiov = iov+ix;
+            if (tiov->iov_len > nbytes) {
+                tiov->iov_base += nbytes;
+                tiov->iov_len -= nbytes;
+            } else {
+                nbytes -= tiov->iov_len;
+                iovcnt--;
+                continue;
+            }
+        }
+        /* blocking write */
+        nbytes = vstrm->ops.writev(
+            vstrm->vp_handle, tiov, iovcnt, VREC_FLAG_NONE);
+        resid -= nbytes;
+    }
+}
+
 static bool
 vrec_flush_out(V_RECSTREAM *vstrm, bool eor)
 {
@@ -803,24 +840,29 @@ vrec_flush_out(V_RECSTREAM *vstrm, bool eor)
     struct iovec iov[VREC_NIOVS];
     struct opr_queue *qiter;
     struct v_rec *vrec;
-    uint32_t nbytes;
+    u_int resid;
     int ix;
 
     /* update fragment header */
-    *(vstrm->st_u.out.frag_header) =
+    vstrm->st_u.out.frag_header =
         htonl((u_int32_t)(vstrm->st_u.out.frag_len | eormask));
 
-    ix = 0;
+    iov[0].iov_base = &(vstrm->st_u.out.frag_header);
+    iov[0].iov_len = sizeof(u_int32_t);
+
+    ix = 1;
+    resid = sizeof(u_int32_t);
     for (opr_queue_Scan(&(vstrm->ioq.q), qiter)) {
         vrec = opr_queue_Entry(qiter, struct v_rec, ioq);
         iov[ix].iov_base = vrec->base;
         iov[ix].iov_len = vrec->len;
-        if (unlikely(
-                (opr_queue_Last(&(vstrm->ioq.q), struct v_rec, ioq)) ||
+        resid += vrec->len;
+        if (unlikely((opr_queue_Last(&(vstrm->ioq.q), struct v_rec, ioq)) ||
                 (ix == (VREC_NIOVS-1)))) {
-            /* blocking write */
-            nbytes = vstrm->ops.writev(
-                vstrm->vp_handle, iov, ix+1 /* iovcnt */, VREC_FLAG_NONE);
+            vrec_flush_segments(vstrm, iov, ix+1 /* iovcnt */, resid);
+            resid = 0;
+            ix = 0;
+            continue;
         }
         ++ix;
     }
