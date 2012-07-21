@@ -751,11 +751,6 @@ xdr_vrec_eof(XDR *xdrs)
                 if ((! vstrm->st_u.in.last_frag) &&
                     (! vrec_set_input_fragment(vstrm)))
                     return (TRUE);
-                /* XXX missing boundary case? */
-#if 0 /* corresponding logic in xdrrec: */
-                if (rstrm->in_finger == rstrm->in_boundry)
-                    return (TRUE);
-#endif /* 0 */
             }
             break;
         case XDR_ENCODE:
