@@ -25,12 +25,12 @@
 
 #include <stdint.h>
 #include <stdbool.h>
-#include <misc/opr_queue.h>
+#include <misc/queue.h>
 
 struct v_rec
 {
-    struct opr_queue ioq;
-    struct opr_queue relq;
+    TAILQ_ENTRY(v_rec) ioq;
+    TAILQ_ENTRY(v_rec) relq;
     uint32_t refcnt;
     void *base;
     u_int off;
@@ -53,7 +53,7 @@ struct v_rec_pos_t
 
 struct v_rec_queue
 {
-    struct opr_queue q;
+    TAILQ_HEAD(vrq_tailq, v_rec) q;
     struct v_rec_pos_t fpos; /* fill position */
     struct v_rec_pos_t lpos; /* logical position, GET|SETPOS */
     int size; /* count of buffer segments */

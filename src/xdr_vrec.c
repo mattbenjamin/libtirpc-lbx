@@ -94,15 +94,15 @@ init_prealloc_queues(V_RECSTREAM *vstrm)
     int ix;
     struct v_rec *vrec;
 
-    opr_queue_Init(&vstrm->prealloc.v_req.q);
+    TAILQ_INIT(&vstrm->prealloc.v_req.q);
     vstrm->prealloc.v_req.size = 0;
 
-    opr_queue_Init(&vstrm->prealloc.v_req_buf.q);
+    TAILQ_INIT(&vstrm->prealloc.v_req_buf.q);
     vstrm->prealloc.v_req_buf.size = 0;
 
     for (ix = 0; ix < VQSIZE; ++ix) {
         vrec = mem_alloc(sizeof(struct v_rec));
-        opr_queue_Append(&vstrm->prealloc.v_req.q, &vrec->ioq);
+        TAILQ_INSERT_TAIL(&vstrm->prealloc.v_req.q, vrec, ioq);
         (vstrm->prealloc.v_req.size)++;
     }
 }
@@ -110,7 +110,7 @@ init_prealloc_queues(V_RECSTREAM *vstrm)
 static inline void
 vrec_init_queue(struct v_rec_queue *q)
 {
-    opr_queue_Init(&q->q);
+    TAILQ_INIT(&q->q);
     q->size = 0;
 }
 
@@ -121,8 +121,8 @@ vrec_get_vrec(V_RECSTREAM *vstrm)
     if (unlikely(vstrm->prealloc.v_req.size == 0)) {
         vrec = mem_alloc(sizeof(struct v_rec));
     } else {
-        vrec = opr_queue_First(&vstrm->prealloc.v_req.q, struct v_rec, ioq);
-        opr_queue_Remove(&vrec->ioq);
+        vrec = TAILQ_FIRST(&vstrm->prealloc.v_req.q);
+        TAILQ_REMOVE(&vstrm->prealloc.v_req.q, vrec, ioq);
         (vstrm->prealloc.v_req.size)--;
     }
     return (vrec);
@@ -134,7 +134,7 @@ vrec_put_vrec(V_RECSTREAM *vstrm, struct v_rec *vrec)
     if (unlikely(vstrm->prealloc.v_req.size > VQSIZE))
         mem_free(vrec, sizeof(struct v_rec));
     else {
-        opr_queue_Append(&vstrm->prealloc.v_req.q, &vrec->ioq);
+        TAILQ_INSERT_TAIL(&vstrm->prealloc.v_req.q, vrec, ioq);
         (vstrm->prealloc.v_req.size)++;
     }
 }
@@ -178,7 +178,7 @@ free_discard_buffers(V_RECSTREAM *vstrm)
 
 static inline void vrec_append_rec(struct v_rec_queue *q, struct v_rec *vrec)
 {
-    opr_queue_Append(&q->q, &vrec->ioq);
+    TAILQ_INSERT_TAIL(&q->q, vrec, ioq);
     (q->size)++;
 }
 
@@ -246,7 +246,7 @@ vrec_stream_reset(V_RECSTREAM *vstrm, enum vrec_cursor wh_pos)
     struct v_rec_pos_t *pos;
     struct v_rec *vrec;
 
-    vrec = opr_queue_First(&vstrm->ioq.q, struct v_rec, ioq);
+    vrec = TAILQ_FIRST(&vstrm->ioq.q);
 
     switch (wh_pos) {
     case VREC_FPOS:
@@ -283,16 +283,16 @@ vrec_truncate_input_q(V_RECSTREAM *vstrm, int max)
      * we are truncating a recv queue.  if any special segments are
      * present, we must detach them.
      */
-    while (unlikely(! opr_queue_IsEmpty(&vstrm->relq.q))) {
-        vrec = opr_queue_First(&vstrm->relq.q, struct v_rec, relq);
+    while (unlikely(! TAILQ_EMPTY(&vstrm->relq.q))) {
+        vrec = TAILQ_FIRST(&vstrm->relq.q);
         /* dequeue segment */
-        opr_queue_Remove(&vrec->ioq);
+        TAILQ_REMOVE(&vstrm->ioq.q, vrec, ioq);
         (vstrm->ioq.size)--;
         /* decref */
         (vrec->refcnt)--;
         /* vrec should be ref'd elsewhere (it was special) */
         if (unlikely(vrec->refcnt == 0)) {
-            opr_queue_Remove(&vrec->relq);
+            TAILQ_REMOVE(&vstrm->relq.q, vrec, relq);
             (vstrm->relq.size)--;
             if (unlikely(vrec->flags & VREC_FLAG_RECLAIM)) {
                 vrec_free_buffer(vrec->base);
@@ -306,8 +306,8 @@ vrec_truncate_input_q(V_RECSTREAM *vstrm, int max)
      * bound on ioq size.
      */
     while (unlikely(vstrm->ioq.size > max)) {
-        vrec = opr_queue_Last(&vstrm->ioq.q, struct v_rec, ioq);
-        opr_queue_Remove(&vrec->ioq);
+        vrec = TAILQ_LAST(&vstrm->ioq.q, vrq_tailq);
+        TAILQ_REMOVE(&vstrm->ioq.q, vrec, ioq);
         (vstrm->ioq.size)--;
         /* almost certainly recycles */
         vrec_rele(vstrm, vrec);
@@ -584,14 +584,12 @@ xdr_vrec_setpos(XDR *xdrs, u_int pos)
 {
     V_RECSTREAM *vstrm = (V_RECSTREAM *)(xdrs->x_private);
     struct v_rec_pos_t *lpos = vrec_lpos(vstrm);
-    struct opr_queue *qiter;
     struct v_rec *vrec;
     u_int resid = 0;
     int ix;
 
     ix = 0;
-    for (opr_queue_Scan(&(vstrm->ioq.q), qiter)) {
-        vrec = opr_queue_Entry(qiter, struct v_rec, ioq);
+    TAILQ_FOREACH(vrec, &(vstrm->ioq.q), ioq) {
         if ((vrec->len + resid) > pos) {
             lpos->vrec = vrec;
             lpos->bpos = ix;
@@ -614,8 +612,8 @@ xdr_vrec_inline(XDR *xdrs, u_int len)
 
     /* we keep xdrrec's inline concept mostly intact.  the function
      * returns the address of the current logical offset in the stream
-     * buffer, iff no less than len contiguous bytes are available in
-     * the segment. */
+     * buffer, iff no less than len contiguous bytes are available at
+     * the current logical offset in the stream. */
 
     switch (vstrm->direction) {
     case XDR_VREC_IN:
@@ -667,9 +665,9 @@ xdr_vrec_destroy(XDR *xdrs)
 
     /* release queued buffers */
     while (vstrm->ioq.size > 0) {
-        vrec = opr_queue_First(&vstrm->ioq.q, struct v_rec, ioq);
+        vrec = TAILQ_FIRST(&vstrm->ioq.q);
         vrec_rele(vstrm, vrec);
-        opr_queue_Remove(&vrec->ioq);
+        TAILQ_REMOVE(&vstrm->ioq.q, vrec, ioq);
         (vstrm->ioq.size)--;
     }
     free_discard_buffers(vstrm);
@@ -810,7 +808,7 @@ vrec_flush_segments(V_RECSTREAM *vstrm, struct iovec *iov, int iovcnt, u_int res
 
     while (resid > 0) {
         /* advance iov */
-        for (ix = 0; nbytes > 0, ix < iovcnt; ++ix) {
+        for (ix = 0; ((nbytes > 0) && (ix < iovcnt)); ++ix) {
             tiov = iov+ix;
             if (tiov->iov_len > nbytes) {
                 tiov->iov_base += nbytes;
@@ -833,7 +831,6 @@ vrec_flush_out(V_RECSTREAM *vstrm, bool eor)
 {
     u_int32_t eormask = (eor == TRUE) ? LAST_FRAG : 0;
     struct iovec iov[VREC_NIOVS];
-    struct opr_queue *qiter;
     struct v_rec *vrec;
     u_int resid;
     int ix;
@@ -847,12 +844,11 @@ vrec_flush_out(V_RECSTREAM *vstrm, bool eor)
 
     ix = 1;
     resid = sizeof(u_int32_t);
-    for (opr_queue_Scan(&(vstrm->ioq.q), qiter)) {
-        vrec = opr_queue_Entry(qiter, struct v_rec, ioq);
+    TAILQ_FOREACH(vrec, &(vstrm->ioq.q), ioq) {
         iov[ix].iov_base = vrec->base;
         iov[ix].iov_len = vrec->len;
         resid += vrec->len;
-        if (unlikely((opr_queue_Last(&(vstrm->ioq.q), struct v_rec, ioq)) ||
+        if (unlikely((vrec == TAILQ_LAST(&(vstrm->ioq.q), vrq_tailq)) ||
                 (ix == (VREC_NIOVS-1)))) {
             vrec_flush_segments(vstrm, iov, ix+1 /* iovcnt */, resid);
             resid = 0;
