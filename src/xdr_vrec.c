@@ -341,13 +341,36 @@ vrec_truncate_input_q(V_RECSTREAM *vstrm, int max)
 static inline bool
 vrec_next(V_RECSTREAM *vstrm, enum vrec_cursor wh_pos, u_int flags)
 {
-    /* TODO: implement! */
-    abort();
+    struct v_rec_pos_t *pos;
+    struct v_rec *vrec;
 
     switch (wh_pos) {
     case VREC_FPOS:
+        pos = vrec_fpos(vstrm);
+        /* XXX re-use following buffers */
+        vrec = TAILQ_NEXT(vrec, ioq);
+        if (likely(! vrec)) {
+            vrec  = vrec_get_vrec(vstrm);
+            vrec->flags = VREC_FLAG_RECLAIM;
+            vrec_append_rec(&vstrm->ioq, vrec);
+            (vstrm->ioq.size)++;
+        }
+        vrec->refcnt = 0;
+        vrec->size = vstrm->def_bsize;
+        vrec->base = vrec_alloc_buffer(vrec->size);
+        vrec->off = 0;
+        vrec->len = 0;
+        pos->vrec = vrec;
+        pos->bpos++;
+        pos->boff = 0;
+        /* pos->loff is unchanged */
+        *(vrec_lpos(vstrm)) = *pos;
         break;
     case VREC_LPOS:
+        pos = vrec_lpos(vstrm);
+        vrec = TAILQ_NEXT(vrec, ioq);
+        if (unlikely(! vrec))
+            return (FALSE);
         break;
     default:
         abort();
