@@ -246,8 +246,6 @@ vrec_stream_reset(V_RECSTREAM *vstrm, enum vrec_cursor wh_pos)
     struct v_rec_pos_t *pos;
     struct v_rec *vrec;
 
-    vrec = TAILQ_FIRST(&vstrm->ioq.q);
-
     switch (wh_pos) {
     case VREC_FPOS:
         pos = vrec_fpos(vstrm);
@@ -265,6 +263,7 @@ vrec_stream_reset(V_RECSTREAM *vstrm, enum vrec_cursor wh_pos)
         break;
     }
 
+    vrec = TAILQ_FIRST(&vstrm->ioq.q);
     pos->vrec = vrec;
     pos->loff = 0;
     pos->bpos = 0; /* first position */
