@@ -543,9 +543,9 @@ again:
 
     __xprt_set_raddr(newxprt, &addr);
 
+    /* XXX fvdl - is this useful? (Yes.  Matt) */
     if (__rpc_fd2sockinfo(sock, &si) && si.si_proto == IPPROTO_TCP) {
         len = 1;
-        /* XXX fvdl - is this useful? */
         setsockopt(sock, IPPROTO_TCP, TCP_NODELAY, &len, sizeof (len));
     }
 

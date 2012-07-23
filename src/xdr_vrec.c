@@ -146,13 +146,15 @@ vrec_put_vrec(V_RECSTREAM *vstrm, struct v_rec *vrec)
 #endif /* 0 */
 #define vrec_free_buffer(addr) mem_free((addr), 0)
 
+#define NSINK 4
+
 static inline void
 init_discard_buffers(V_RECSTREAM *vstrm)
 {
     int ix;
     struct iovec *iov;
 
-    for (ix = 0; ix < 4; ix++) {
+    for (ix = 0; ix < NSINK; ix++) {
         iov = &(vstrm->st_u.in.iovsink[ix]);
         iov->iov_base = vrec_alloc_buffer(vstrm->def_bsize);
         iov->iov_len = 0;
@@ -165,7 +167,7 @@ free_discard_buffers(V_RECSTREAM *vstrm)
     int ix;
     struct iovec *iov;
 
-    for (ix = 0; ix < 4; ix++) {
+    for (ix = 0; ix < NSINK; ix++) {
         iov = &(vstrm->st_u.in.iovsink[ix]);
         vrec_free_buffer(iov->iov_base);
     }
@@ -490,6 +492,7 @@ static bool
 xdr_vrec_getbytes(XDR *xdrs, char *addr, u_int len)
 {
     V_RECSTREAM *vstrm = (V_RECSTREAM *)xdrs->x_private;
+    struct v_rec_pos_t *pos;
     int current;
 
     while (len > 0) {
@@ -508,6 +511,8 @@ xdr_vrec_getbytes(XDR *xdrs, char *addr, u_int len)
         vstrm->st_u.in.fbtbc -= current;
         len -= current;
     }
+    pos = vrec_lpos(vstrm);
+    
     return (TRUE);
 }
 
@@ -933,6 +938,12 @@ vrec_set_input_fragment(V_RECSTREAM *vstrm)
 static bool
 vrec_get_input_bytes(V_RECSTREAM *vstrm, char *addr, int len)
 {
+    struct v_rec_pos_t *fpos = vrec_fpos(vstrm);
+    struct v_rec_pos_t *lpos = vrec_lpos(vstrm);
+
+    
+
+
     /* TODO: implement */
     abort();
 
@@ -948,7 +959,7 @@ vrec_skip_input_bytes(V_RECSTREAM *vstrm, long cnt)
     struct iovec *iov;
 
     while (cnt > 0) {
-        for (ix = 0, resid = cnt; ((resid > 0) && (ix < 4)); ++ix) {
+        for (ix = 0, resid = cnt; ((resid > 0) && (ix < NSINK)); ++ix) {
             iov = &(vstrm->st_u.in.iovsink[ix]);
             iov->iov_len = MIN(resid, vstrm->def_bsize);
             resid -= iov->iov_len;
