@@ -623,7 +623,7 @@ xdr_vrec_getbufs(XDR *xdrs, xdr_uio *uio, u_int len, u_int flags)
 #endif /* 0 */
 }
 
-/* XXX looks like dont need len */
+/* Post buffers on the queue. */
 static bool
 xdr_vrec_putbufs(XDR *xdrs, xdr_uio *uio, u_int flags)
 {
@@ -632,13 +632,16 @@ xdr_vrec_putbufs(XDR *xdrs, xdr_uio *uio, u_int flags)
     xdr_buffer *xbuf;
     int ix;
 
+    /* XXX potentially we should give the upper layer control over
+     * whether buffers are spliced or recycled */
+
     for (ix = 0; ix < uio->xbs_cnt; ++ix) {
         /* advance fill pointer, do not allocate buffers */
         if (! vrec_next(vstrm, VREC_FPOS, VREC_FLAG_XTENDQ))
             return (FALSE);
-        /* XXX for the moment, ignore xbs_flags */
         xbuf = &(uio->xbs_buf[ix]);
         pos->vrec->flags = VREC_FLAG_NONE; /* !RECLAIM */
+        pos->vrec->refcnt = (xbuf->xb_flags & XBS_FLAG_GIFT) ? 0 : 1;
         pos->vrec->base = xbuf->xb_base;
         pos->vrec->size = xbuf->xb_len;
         pos->vrec->len = xbuf->xb_len;

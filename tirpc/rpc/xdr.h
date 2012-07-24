@@ -106,6 +106,9 @@ enum xdr_op {
                    * BYTES_PER_XDR_UNIT)
 #endif
 
+#define XBS_FLAG_NONE   0x0000
+#define XBS_FLAG_GIFT   0x0001
+
 /* XDR buffer descriptors. */
 typedef struct __rpc_buffer {
     void *xb_base;
