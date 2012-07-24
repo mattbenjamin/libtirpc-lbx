@@ -883,7 +883,8 @@ xdr_vrec_endofrecord(XDR *xdrs, bool flush)
 #define VREC_NIOVS 8
 
 static inline void
-vrec_flush_segments(V_RECSTREAM *vstrm, struct iovec *iov, int iovcnt, u_int resid)
+vrec_flush_segments(V_RECSTREAM *vstrm, struct iovec *iov, int iovcnt,
+                    u_int resid)
 {
     uint32_t nbytes = 0;
     struct iovec *tiov;
