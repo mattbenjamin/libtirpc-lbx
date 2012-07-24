@@ -277,33 +277,12 @@ vrec_truncate_input_q(V_RECSTREAM *vstrm, int max)
     struct v_rec *vrec;
 
     /* the ioq queue can contain shared and special segments (eg, mapped
-     * buffers).  if present, these segments will also be threaded on
-     * a release (sub) queue.
-     *
-     * we are truncating a recv queue.  if any special segments are
-     * present, we must detach them.
+     * buffers).  when a segment is shared with an upper layer, 
+     * vrec->refcnt is increased.  if a buffer should be freed by this
+     * module, bit VREC_FLAG_RECLAIM is set in vrec->flags.
      */
-    while (unlikely(! TAILQ_EMPTY(&vstrm->relq.q))) {
-        vrec = TAILQ_FIRST(&vstrm->relq.q);
-        /* dequeue segment */
-        TAILQ_REMOVE(&vstrm->ioq.q, vrec, ioq);
-        (vstrm->ioq.size)--;
-        /* decref */
-        (vrec->refcnt)--;
-        /* vrec should be ref'd elsewhere (it was special) */
-        if (unlikely(vrec->refcnt == 0)) {
-            TAILQ_REMOVE(&vstrm->relq.q, vrec, relq);
-            (vstrm->relq.size)--;
-            if (unlikely(vrec->flags & VREC_FLAG_RECLAIM)) {
-                vrec_free_buffer(vrec->base);
-            }
-            /* recycle it */
-            vrec_put_vrec(vstrm, vrec);
-        }
-    }
 
-    /* any segment left in ioq is a network buffer.  enforce upper
-     * bound on ioq size.
+    /* enforce upper bound on ioq size.
      */
     while (unlikely(vstrm->ioq.size > max)) {
         vrec = TAILQ_LAST(&vstrm->ioq.q, vrq_tailq);
@@ -413,7 +392,6 @@ xdr_vrec_create(XDR *xdrs,
 
     /* init queues */
     vrec_init_queue(&vstrm->ioq);
-    vrec_init_queue(&vstrm->relq);
 
     /* buffer tuning */
     vstrm->def_bsize = def_bsize;

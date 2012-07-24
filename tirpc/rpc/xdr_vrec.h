@@ -30,7 +30,6 @@
 struct v_rec
 {
     TAILQ_ENTRY(v_rec) ioq;
-    TAILQ_ENTRY(v_rec) relq;
     uint32_t refcnt;
     void *base;
     u_int off;
@@ -79,7 +78,6 @@ struct v_rec_strm
 
     /* buffer queues */
     struct v_rec_queue ioq;
-    struct v_rec_queue relq;
 
     /* opaque provider handle */
     void *vp_handle;
@@ -127,9 +125,8 @@ typedef struct v_rec_strm V_RECSTREAM;
 #define VREC_FLAG_NONBLOCK      0x0001
 #define VREC_FLAG_RECLAIM       0x0002
 #define VREC_FLAG_BUFQ          0x0004
-#define VREC_FLAG_RELQ          0x0008
-#define VREC_FLAG_XTENDQ        0x0010
-#define VREC_FLAG_BALLOC        0x0020
+#define VREC_FLAG_XTENDQ        0x0008
+#define VREC_FLAG_BALLOC        0x0010
 
 /* vector equivalents */
 
