@@ -278,7 +278,7 @@ vrec_truncate_input_q(V_RECSTREAM *vstrm, int max)
     struct v_rec *vrec;
 
     /* the ioq queue can contain shared and special segments (eg, mapped
-     * buffers).  if present, these segements will also be threaded on
+     * buffers).  if present, these segments will also be threaded on
      * a release (sub) queue.
      *
      * we are truncating a recv queue.  if any special segments are
@@ -700,6 +700,7 @@ xdr_vrec_putbufs(XDR *xdrs, xdr_uio *uio, u_int flags)
         for (ix = 0; ix < uio->xbs_cnt; ++ix) {
             struct v_rec *vrec = (struct v_rec *)(uio->xbs_buf[ix]).xb_p1;
             vrec_rele(vstrm, vrec);
+            mem_free(uio->xbs_buf, 0);
         }
         break;
     case FALSE:
