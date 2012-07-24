@@ -177,7 +177,6 @@ free_discard_buffers(V_RECSTREAM *vstrm)
 #define vrec_fpos(vstrm) (&vstrm->ioq.fpos)
 #define vrec_lpos(vstrm) (&vstrm->ioq.lpos)
 
-
 static inline void vrec_append_rec(struct v_rec_queue *q, struct v_rec *vrec)
 {
     TAILQ_INSERT_TAIL(&q->q, vrec, ioq);
@@ -587,7 +586,9 @@ xdr_vrec_putbytes(XDR *xdrs, const char *addr, u_int len)
                 return (FALSE);
         }
         /* in glibc 2.14+ x86_64, memcpy no longer tries to handle
-         * overlapping areas, see Fedora Bug 691336 (NOTABUG) */
+         * overlapping areas, see Fedora Bug 691336 (NOTABUG);
+         * we dont permit overlapping segments, so memcpy may be a
+         * small win */
         memcpy((pos->vrec->base + pos->vrec->off), addr, delta);
         pos->vrec->off += delta;
         pos->boff += delta;
