@@ -866,7 +866,7 @@ xdr_vrec_endofrecord(XDR *xdrs, bool flush)
     }
 
     /* XXX check */
-    vstrm->st_u.out.frag_header = 
+    vstrm->st_u.out.frag_header =
         htonl((u_int32_t)(vstrm->st_u.out.frag_len | LAST_FRAG));
 
     /* advance fill pointer */
