@@ -79,13 +79,11 @@ static const struct  xdr_ops xdr_vrec_ops = {
 
 #define LAST_FRAG ((u_int32_t)(1 << 31))
 
-static u_int fix_buf_size(u_int);
 static bool vrec_flush_out(V_RECSTREAM *, bool);
-static bool fill_input_buf(V_RECSTREAM *);
-static bool vrec_get_input_bytes(V_RECSTREAM *, char *, int);
 static bool vrec_get_input_fragment_bytes(V_RECSTREAM *, char **, int);
 static bool vrec_set_input_fragment(V_RECSTREAM *);
 static bool vrec_skip_input_bytes(V_RECSTREAM *, long);
+static bool vrec_get_input_segments(V_RECSTREAM *, int);
 
 /* XXX might not be faster than jemalloc, &c? */
 static inline void
@@ -146,7 +144,8 @@ vrec_put_vrec(V_RECSTREAM *vstrm, struct v_rec *vrec)
 #endif /* 0 */
 #define vrec_free_buffer(addr) mem_free((addr), 0)
 
-#define NSINK 1
+#define VREC_NSINK 1
+#define VREC_NFILL 6
 
 static inline void
 init_discard_buffers(V_RECSTREAM *vstrm)
@@ -154,7 +153,7 @@ init_discard_buffers(V_RECSTREAM *vstrm)
     int ix;
     struct iovec *iov;
 
-    for (ix = 0; ix < NSINK; ix++) {
+    for (ix = 0; ix < VREC_NSINK; ix++) {
         iov = &(vstrm->st_u.in.iovsink[ix]);
         iov->iov_base = vrec_alloc_buffer(vstrm->def_bsize);
         iov->iov_len = 0;
@@ -167,7 +166,7 @@ free_discard_buffers(V_RECSTREAM *vstrm)
     int ix;
     struct iovec *iov;
 
-    for (ix = 0; ix < NSINK; ix++) {
+    for (ix = 0; ix < VREC_NSINK; ix++) {
         iov = &(vstrm->st_u.in.iovsink[ix]);
         vrec_free_buffer(iov->iov_base);
     }
@@ -364,7 +363,7 @@ vrec_next(V_RECSTREAM *vstrm, enum vrec_cursor wh_pos, u_int flags)
         vrec->off = 0;
         vrec->len = 0;
         pos->vrec = vrec;
-        pos->bpos++;
+        (pos->bpos)++;
         pos->boff = 0;
         /* pos->loff is unchanged */
         *(vrec_lpos(vstrm)) = *pos;
@@ -374,6 +373,9 @@ vrec_next(V_RECSTREAM *vstrm, enum vrec_cursor wh_pos, u_int flags)
         vrec = TAILQ_NEXT(vrec, ioq);
         if (unlikely(! vrec))
             return (FALSE);
+        pos->vrec = vrec;
+        (pos->bpos)++;
+        pos->boff = 0;
         break;
     default:
         abort();
@@ -494,25 +496,71 @@ xdr_vrec_getbytes(XDR *xdrs, char *addr, u_int len)
 {
     V_RECSTREAM *vstrm = (V_RECSTREAM *)xdrs->x_private;
     struct v_rec_pos_t *pos;
-    int current;
+    u_long cbtbc;
 
-    while (len > 0) {
-        current = (int)vstrm->st_u.in.fbtbc;
-        if (current == 0) {
-            if (vstrm->st_u.in.last_frag)
-                return (FALSE);
-            if (! vrec_set_input_fragment(vstrm))
-                return (FALSE);
-            continue;
+    switch (vstrm->direction) {
+    case XDR_VREC_IN:
+        switch (xdrs->x_op) {
+        case XDR_ENCODE:
+            abort();
+            break;
+        case XDR_DECODE:
+            pos = vrec_lpos(vstrm);
+        restart:
+            /* CASE 1:  re-consuming bytes in a stream (after SETPOS/rewind) */
+            while (pos->loff < vstrm->st_u.in.buflen) {
+                while (len > 0) {
+                    u_int delta = MIN(len, (pos->vrec->len - pos->boff));
+                    if (unlikely(! delta)) {
+                        if (! vrec_next(vstrm, VREC_LPOS, VREC_FLAG_NONE))
+                            return (FALSE);
+                        goto restart;
+                    }
+                    memcpy(addr, (pos->vrec->base + pos->boff), delta);
+                    pos->loff += delta;
+                    pos->boff += delta;
+                    len -= delta;
+                }
+            }
+            /* CASE 2: reading into the stream */
+            while (len > 0) {
+                cbtbc = vstrm->st_u.in.fbtbc;
+                if (unlikely(! cbtbc)) {
+                    if (vstrm->st_u.in.last_frag)
+                        return (FALSE);
+                    if (! vrec_set_input_fragment(vstrm))
+                        return (FALSE);
+                    continue;
+                }
+                cbtbc = (len < cbtbc) ? len : cbtbc;
+                if (! vrec_get_input_segments(vstrm, cbtbc))
+                    return (FALSE);
+                /* now we have CASE 1 */
+                goto restart;
+            }
+            break;
+        default:
+            abort();
+            break;
         }
-        current = (len < current) ? len : current;
-        if (! vrec_get_input_bytes(vstrm, addr, current))
-            return (FALSE);
-        addr += current;
-        vstrm->st_u.in.fbtbc -= current;
-        len -= current;
+        break;
+    case XDR_VREC_OUT:
+        switch (xdrs->x_op) {
+        case XDR_ENCODE:
+            /* TODO: implement */
+            break;
+        case XDR_DECODE:
+        default:
+            abort();
+            break;
+        }
+        break;
+    default:
+        abort();
+        break;
     }
-    pos = vrec_lpos(vstrm);
+
+    /* assert(len == 0); */
     return (TRUE);
 }
 
@@ -701,6 +749,12 @@ xdr_vrec_destroy(XDR *xdrs)
     }
     free_discard_buffers(vstrm);
     mem_free(vstrm, sizeof(V_RECSTREAM));
+}
+
+static bool
+xdr_vrec_noop(void)
+{
+    return (FALSE);
 }
 
 
@@ -936,22 +990,6 @@ vrec_set_input_fragment(V_RECSTREAM *vstrm)
     return (TRUE);
 }
 
-/* Read contguous bytes from stream. */
-static bool
-vrec_get_input_bytes(V_RECSTREAM *vstrm, char *addr, int len)
-{
-    struct v_rec_pos_t *fpos = vrec_fpos(vstrm);
-    struct v_rec_pos_t *lpos = vrec_lpos(vstrm);
-
-    
-
-
-    /* TODO: implement */
-    abort();
-
-    return (FALSE);
-}
-
 /* Consume and discard cnt bytes from the input stream. */
 static bool
 vrec_skip_input_bytes(V_RECSTREAM *vstrm, long cnt)
@@ -961,7 +999,7 @@ vrec_skip_input_bytes(V_RECSTREAM *vstrm, long cnt)
     struct iovec *iov;
 
     while (cnt > 0) {
-        for (ix = 0, resid = cnt; ((resid > 0) && (ix < NSINK)); ++ix) {
+        for (ix = 0, resid = cnt; ((resid > 0) && (ix < VREC_NSINK)); ++ix) {
             iov = &(vstrm->st_u.in.iovsink[ix]);
             iov->iov_len = MIN(resid, vstrm->def_bsize);
             resid -= iov->iov_len;
@@ -975,17 +1013,35 @@ vrec_skip_input_bytes(V_RECSTREAM *vstrm, long cnt)
     return (TRUE);
 }
 
-static u_int
-fix_buf_size(u_int s)
+/* Read input bytes from the stream, segment-wise. */
+static bool vrec_get_input_segments(V_RECSTREAM *vstrm, int cnt)
 {
+    struct v_rec_pos_t *pos = vrec_fpos(vstrm);
+    struct v_rec *vrecs[VREC_NFILL];
+    struct iovec iov[VREC_NFILL];
+    u_int32_t resid;
+    int ix;
 
-    if (s < 100)
-        s = 4000;
-    return (RNDUP(s));
-}
-
-static bool
-xdr_vrec_noop(void)
-{
-    return (FALSE);
+    resid = cnt;
+    for (ix = 0; ((ix < VREC_NFILL) && (resid > 0)); ++ix) {
+        /* XXX */
+        if (! vrec_next(vstrm, VREC_FPOS, VREC_FLAG_XTENDQ))
+            return (FALSE);
+        vrecs[ix] = pos->vrec;
+        iov[ix].iov_base = vrecs[ix]->base;
+        iov[ix].iov_len = MIN(vrecs[ix]->size, resid);
+        resid -= iov[ix].iov_len;
+    }
+    resid = vstrm->ops.readv(vstrm->vp_handle, iov, ix, VREC_FLAG_NONE);
+    /* XXX callers will re-try if we get a short read */
+    for (ix = 0; ((ix < VREC_NFILL) && (resid > 0)); ++ix) {
+        vstrm->st_u.in.buflen += iov[ix].iov_len;
+        vrecs[ix]->len = iov[ix].iov_len;
+        resid -= iov[ix].iov_len;
+    }
+    pos->vrec = vrecs[ix];
+    pos->loff = vstrm->st_u.in.buflen - vrecs[ix]->len;
+    pos->bpos += ix;
+    pos->boff = 0;
+    return (TRUE);
 }

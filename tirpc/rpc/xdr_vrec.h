@@ -100,8 +100,9 @@ struct v_rec_strm
     union {
         struct {
             struct iovec iovsink[4];
-            long fbtbc; /* fragment bytes to be consumed */
-            long rbtbc; /* readahead bytes to be consumed */
+            u_long buflen; /* logical input buffer length */
+            u_long fbtbc; /* fragment bytes to be consumed */
+            u_int rbtbc; /* readahead bytes to be consumed */
             long readahead_bytes; /* bytes to read ahead across fragments */
             u_int32_t frag_header;
             bool last_frag;
