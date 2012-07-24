@@ -146,7 +146,7 @@ vrec_put_vrec(V_RECSTREAM *vstrm, struct v_rec *vrec)
 #endif /* 0 */
 #define vrec_free_buffer(addr) mem_free((addr), 0)
 
-#define NSINK 4
+#define NSINK 1
 
 static inline void
 init_discard_buffers(V_RECSTREAM *vstrm)
@@ -349,17 +349,18 @@ vrec_next(V_RECSTREAM *vstrm, enum vrec_cursor wh_pos, u_int flags)
     switch (wh_pos) {
     case VREC_FPOS:
         pos = vrec_fpos(vstrm);
-        /* XXX re-use following buffers */
+        /* re-use following buffers */
         vrec = TAILQ_NEXT(vrec, ioq);
-        if (likely(! vrec)) {
+        /* append new buffers, iif requested */
+        if (likely(! vrec) && (flags & VREC_FLAG_XTENDQ)) {
             vrec  = vrec_get_vrec(vstrm);
+            vrec->size = vstrm->def_bsize;
+            vrec->base = vrec_alloc_buffer(vrec->size);
             vrec->flags = VREC_FLAG_RECLAIM;
             vrec_append_rec(&vstrm->ioq, vrec);
             (vstrm->ioq.size)++;
         }
         vrec->refcnt = 0;
-        vrec->size = vstrm->def_bsize;
-        vrec->base = vrec_alloc_buffer(vrec->size);
         vrec->off = 0;
         vrec->len = 0;
         pos->vrec = vrec;
@@ -512,7 +513,6 @@ xdr_vrec_getbytes(XDR *xdrs, char *addr, u_int len)
         len -= current;
     }
     pos = vrec_lpos(vstrm);
-    
     return (TRUE);
 }
 
@@ -531,6 +531,8 @@ xdr_vrec_putbytes(XDR *xdrs, const char *addr, u_int len)
             if (! vrec_next(vstrm, VREC_FPOS, VREC_FLAG_XTENDQ))
                 return (FALSE);
         }
+        /* in glibc 2.14+ x86_64, memcpy no longer tries to handle
+         * overlapping areas, see Fedora Bug 691336 (NOTABUG) */
         memcpy((pos->vrec->base + pos->vrec->off), addr, delta);
         pos->vrec->off += delta;
         pos->boff += delta;
