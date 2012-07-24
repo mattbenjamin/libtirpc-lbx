@@ -350,7 +350,7 @@ vrec_next(V_RECSTREAM *vstrm, enum vrec_cursor wh_pos, u_int flags)
     case VREC_FPOS:
         pos = vrec_fpos(vstrm);
         /* re-use following buffers */
-        vrec = TAILQ_NEXT(vrec, ioq);
+        vrec = TAILQ_NEXT(pos->vrec, ioq);
         /* append new segments, iif requested */
         if (likely(! vrec) && (flags & VREC_FLAG_XTENDQ)) {
             vrec  = vrec_get_vrec(vstrm);
@@ -374,7 +374,7 @@ vrec_next(V_RECSTREAM *vstrm, enum vrec_cursor wh_pos, u_int flags)
         break;
     case VREC_LPOS:
         pos = vrec_lpos(vstrm);
-        vrec = TAILQ_NEXT(vrec, ioq);
+        vrec = TAILQ_NEXT(pos->vrec, ioq);
         if (unlikely(! vrec))
             return (FALSE);
         pos->vrec = vrec;
@@ -598,19 +598,20 @@ xdr_vrec_putbytes(XDR *xdrs, const char *addr, u_int len)
     return (TRUE);
 }
 
-/* Get buffers from the queue. */
+/* Get buffers from the queue.
+ * XXX do we need len? */
 static bool
 xdr_vrec_getbufs(XDR *xdrs, xdr_uio *uio, u_int len, u_int flags)
 {
     V_RECSTREAM *vstrm = (V_RECSTREAM *)xdrs->x_private;
     struct v_rec_pos_t *pos;
-    xdr_buffer *xbuf;
-    int ix;
     u_long cbtbc;
+    int ix;
 
     /* XXX caller can't guess how many buffers */
     uio->xbs_cnt = MIN(VREC_MAXBUFS, (len / vstrm->def_bsize));
     uio->xbs_buf = mem_alloc(uio->xbs_cnt);
+    uio->xbs_resid = 0;
     ix = 0;
 
     /* XXX ARG! I dont think vrec_lpos(vstrm) fully works here */
@@ -711,6 +712,7 @@ xdr_vrec_putbufs(XDR *xdrs, xdr_uio *uio, u_int flags)
         pos->vrec->off = 0;
     }
     /* XXX move vrec_lpos(vstrm)? */
+    return (TRUE);
 }
 
 static u_int
