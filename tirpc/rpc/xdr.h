@@ -128,6 +128,10 @@ typedef struct __rpc_buffers {
     void       *xbs_u1;
 } xdr_uio;
 
+/* Op flags */
+#define XDR_PUTBUFS_FLAG_NONE   0x0000
+#define XDR_PUTBUFS_FLAG_BRELE  0x0001
+
 /*
  * The XDR handle.
  * Contains operation which is being applied to the stream,

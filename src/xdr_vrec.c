@@ -684,7 +684,8 @@ xdr_vrec_getbufs(XDR *xdrs, xdr_uio *uio, u_int len, u_int flags)
     return (TRUE);
 }
 
-/* Post buffers on the queue. */
+/* Post buffers on the queue, or, if indicated in flags, return buffers
+ * referenced with getbufs. */
 static bool
 xdr_vrec_putbufs(XDR *xdrs, xdr_uio *uio, u_int flags)
 {
@@ -693,25 +694,36 @@ xdr_vrec_putbufs(XDR *xdrs, xdr_uio *uio, u_int flags)
     xdr_buffer *xbuf;
     int ix;
 
-    /* XXX potentially we should give the upper layer control over
-     * whether buffers are spliced or recycled */
+    switch (flags & XDR_PUTBUFS_FLAG_BRELE) {
+    case TRUE:
+        /* the caller is returning buffers */
+        for (ix = 0; ix < uio->xbs_cnt; ++ix) {
+            struct v_rec *vrec = (struct v_rec *)(uio->xbs_buf[ix]).xb_p1;
+            vrec_rele(vstrm, vrec);
+        }
+        break;
+    case FALSE:
+    default:
+        /* XXX potentially we should give the upper layer control over
+         * whether buffers are spliced or recycled */
 
-    /* XXX add logic for releasing buffers referenced in previous
-     * calls to xdr_vrec_getbufs? */
-
-    for (ix = 0; ix < uio->xbs_cnt; ++ix) {
-        /* advance fill pointer, do not allocate buffers */
-        if (! vrec_next(vstrm, VREC_FPOS, VREC_FLAG_XTENDQ))
-            return (FALSE);
-        xbuf = &(uio->xbs_buf[ix]);
-        pos->vrec->flags = VREC_FLAG_NONE; /* !RECLAIM */
-        pos->vrec->refcnt = (xbuf->xb_flags & XBS_FLAG_GIFT) ? 0 : 1;
-        pos->vrec->base = xbuf->xb_base;
-        pos->vrec->size = xbuf->xb_len;
-        pos->vrec->len = xbuf->xb_len;
-        pos->vrec->off = 0;
+        /* XXX add logic for releasing buffers referenced in previous
+         * calls to xdr_vrec_getbufs? */
+        for (ix = 0; ix < uio->xbs_cnt; ++ix) {
+            /* advance fill pointer, do not allocate buffers */
+            if (! vrec_next(vstrm, VREC_FPOS, VREC_FLAG_XTENDQ))
+                return (FALSE);
+            xbuf = &(uio->xbs_buf[ix]);
+            pos->vrec->flags = VREC_FLAG_NONE; /* !RECLAIM */
+            pos->vrec->refcnt = (xbuf->xb_flags & XBS_FLAG_GIFT) ? 0 : 1;
+            pos->vrec->base = xbuf->xb_base;
+            pos->vrec->size = xbuf->xb_len;
+            pos->vrec->len = xbuf->xb_len;
+            pos->vrec->off = 0;
+        }
+        /* XXX move vrec_lpos(vstrm)? */
+        break;
     }
-    /* XXX move vrec_lpos(vstrm)? */
     return (TRUE);
 }
 
