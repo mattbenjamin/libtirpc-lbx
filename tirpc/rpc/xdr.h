@@ -121,6 +121,8 @@ typedef struct __rpc_buffer {
 typedef struct __rpc_buffers {
     xdr_buffer *xbs_buf; /* array of buffers */
     int         xbs_cnt; /* count of buffers */
+    size_t      xbs_offset; /* not used (yet) */
+    size_t      xbs_resid; /* residual bytes */
     u_int       xbs_flags;
     void       *xbs_p1;
     void       *xbs_u1;

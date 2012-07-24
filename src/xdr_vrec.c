@@ -146,6 +146,7 @@ vrec_put_vrec(V_RECSTREAM *vstrm, struct v_rec *vrec)
 
 #define VREC_NSINK 1
 #define VREC_NFILL 6
+#define VREC_MAXBUFS 24
 
 static inline void
 init_discard_buffers(V_RECSTREAM *vstrm)
@@ -501,6 +502,8 @@ xdr_vrec_getbytes(XDR *xdrs, char *addr, u_int len)
     struct v_rec_pos_t *pos;
     u_long cbtbc;
 
+    /* XXX ARG! I dont think vrec_lpos(vstrm) fully works here */
+
     switch (vstrm->direction) {
     case XDR_VREC_IN:
         switch (xdrs->x_op) {
@@ -595,32 +598,89 @@ xdr_vrec_putbytes(XDR *xdrs, const char *addr, u_int len)
     return (TRUE);
 }
 
+/* Get buffers from the queue. */
 static bool
 xdr_vrec_getbufs(XDR *xdrs, xdr_uio *uio, u_int len, u_int flags)
 {
-#if 0 /* XXX */
-    RECSTREAM *rstrm = (RECSTREAM *)(xdrs->x_private);
-    size_t current;
+    V_RECSTREAM *vstrm = (V_RECSTREAM *)xdrs->x_private;
+    struct v_rec_pos_t *pos;
+    xdr_buffer *xbuf;
+    int ix;
+    u_long cbtbc;
 
-    while (len > 0) {
-        current = (size_t)((u_long)rstrm->out_boundry -
-                           (u_long)rstrm->out_finger);
-        current = (len < current) ? len : current;
-        memmove(rstrm->out_finger, addr, current);
-        rstrm->out_finger += current;
-        addr += current;
-        len -= current;
-        if (rstrm->out_finger == rstrm->out_boundry) {
-            rstrm->frag_sent = TRUE;
-            if (! flush_out(rstrm, FALSE))
-                return (FALSE);
+    /* XXX caller can't guess how many buffers */
+    uio->xbs_cnt = MIN(VREC_MAXBUFS, (len / vstrm->def_bsize));
+    uio->xbs_buf = mem_alloc(uio->xbs_cnt);
+    ix = 0;
+
+    /* XXX ARG! I dont think vrec_lpos(vstrm) fully works here */
+
+    switch (vstrm->direction) {
+    case XDR_VREC_IN:
+        switch (xdrs->x_op) {
+        case XDR_ENCODE:
+            abort();
+            break;
+        case XDR_DECODE:
+            pos = vrec_lpos(vstrm); /* XXX flag?? */
+        restart:
+            /* CASE 1:  re-consuming bytes in a stream (after SETPOS/rewind) */
+            while (pos->loff < vstrm->st_u.in.buflen) {
+                while (len > 0) {
+                    u_int delta = MIN(len, (pos->vrec->len - pos->boff));
+                    if (unlikely(! delta)) {
+                        if (! vrec_next(vstrm, VREC_LPOS, VREC_FLAG_NONE))
+                            return (FALSE);
+                        goto restart;
+                    }
+                    (uio->xbs_buf[ix]).xb_p1 = pos->vrec;
+                    (pos->vrec->refcnt)++;
+                    (uio->xbs_buf[ix]).xb_base = (pos->vrec->base + pos->boff);
+                    pos->loff += delta;
+                    pos->boff += delta;
+                    len -= delta;
+                }
+            }
+            /* CASE 2: reading into the stream */
+            while (len > 0) {
+                cbtbc = vstrm->st_u.in.fbtbc;
+                if (unlikely(! cbtbc)) {
+                    if (vstrm->st_u.in.last_frag)
+                        return (FALSE);
+                    if (! vrec_set_input_fragment(vstrm))
+                        return (FALSE);
+                    continue;
+                }
+                cbtbc = (len < cbtbc) ? len : cbtbc;
+                if (! vrec_get_input_segments(vstrm, cbtbc))
+                    return (FALSE);
+                /* now we have CASE 1 */
+                goto restart;
+            }
+            break;
+        default:
+            abort();
+            break;
         }
+        break;
+    case XDR_VREC_OUT:
+        switch (xdrs->x_op) {
+        case XDR_ENCODE:
+            /* TODO: implement */
+            break;
+        case XDR_DECODE:
+        default:
+            abort();
+            break;
+        }
+        break;
+    default:
+        abort();
+        break;
     }
+
+    /* assert(len == 0); */
     return (TRUE);
-#else
-    abort();
-    return (FALSE);
-#endif /* 0 */
 }
 
 /* Post buffers on the queue. */
@@ -634,6 +694,9 @@ xdr_vrec_putbufs(XDR *xdrs, xdr_uio *uio, u_int flags)
 
     /* XXX potentially we should give the upper layer control over
      * whether buffers are spliced or recycled */
+
+    /* XXX add logic for releasing buffers referenced in previous
+     * calls to xdr_vrec_getbufs? */
 
     for (ix = 0; ix < uio->xbs_cnt; ++ix) {
         /* advance fill pointer, do not allocate buffers */
