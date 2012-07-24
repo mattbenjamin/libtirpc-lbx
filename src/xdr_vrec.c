@@ -53,7 +53,7 @@ static bool xdr_vrec_putlong(XDR *, const long *);
 static bool xdr_vrec_getbytes(XDR *, char *, u_int);
 static bool xdr_vrec_putbytes(XDR *, const char *, u_int);
 static bool xdr_vrec_getbufs(XDR *, xdr_uio *, u_int, u_int);
-static bool xdr_vrec_putbufs(XDR *, xdr_uio *, u_int, u_int);
+static bool xdr_vrec_putbufs(XDR *, xdr_uio *, u_int);
 static u_int xdr_vrec_getpos(XDR *);
 static bool xdr_vrec_setpos(XDR *, u_int);
 static int32_t *xdr_vrec_inline(XDR *, u_int);
@@ -350,12 +350,15 @@ vrec_next(V_RECSTREAM *vstrm, enum vrec_cursor wh_pos, u_int flags)
         pos = vrec_fpos(vstrm);
         /* re-use following buffers */
         vrec = TAILQ_NEXT(vrec, ioq);
-        /* append new buffers, iif requested */
+        /* append new segments, iif requested */
         if (likely(! vrec) && (flags & VREC_FLAG_XTENDQ)) {
             vrec  = vrec_get_vrec(vstrm);
-            vrec->size = vstrm->def_bsize;
-            vrec->base = vrec_alloc_buffer(vrec->size);
-            vrec->flags = VREC_FLAG_RECLAIM;
+            /* alloc a buffer, iif requested */
+            if (flags & VREC_FLAG_BALLOC) {
+                vrec->size = vstrm->def_bsize;
+                vrec->base = vrec_alloc_buffer(vrec->size);
+                vrec->flags = VREC_FLAG_RECLAIM;
+            }
             vrec_append_rec(&vstrm->ioq, vrec);
             (vstrm->ioq.size)++;
         }
@@ -477,7 +480,7 @@ xdr_vrec_putlong(XDR *xdrs, const long *lp)
     if (unlikely((pos->vrec->size - pos->vrec->len)
                  < sizeof(int32_t))) {
         /* advance fill pointer */
-        if (! vrec_next(vstrm, VREC_FPOS, VREC_FLAG_XTENDQ))
+        if (! vrec_next(vstrm, VREC_FPOS, VREC_FLAG_XTENDQ|VREC_FLAG_BALLOC))
             return (FALSE);
     }
 
@@ -576,7 +579,8 @@ xdr_vrec_putbytes(XDR *xdrs, const char *addr, u_int len)
         delta = pos->vrec->size - pos->vrec->len;
         if (unlikely(! delta)) {
             /* advance fill pointer */
-            if (! vrec_next(vstrm, VREC_FPOS, VREC_FLAG_XTENDQ))
+            if (! vrec_next(vstrm, VREC_FPOS,
+                            VREC_FLAG_XTENDQ|VREC_FLAG_BALLOC))
                 return (FALSE);
         }
         /* in glibc 2.14+ x86_64, memcpy no longer tries to handle
@@ -619,32 +623,28 @@ xdr_vrec_getbufs(XDR *xdrs, xdr_uio *uio, u_int len, u_int flags)
 #endif /* 0 */
 }
 
+/* XXX looks like dont need len */
 static bool
-xdr_vrec_putbufs(XDR *xdrs, xdr_uio *uio, u_int len, u_int flags)
+xdr_vrec_putbufs(XDR *xdrs, xdr_uio *uio, u_int flags)
 {
-#if 0 /* XXX */
-    RECSTREAM *rstrm = (RECSTREAM *)(xdrs->x_private);
-    size_t current;
+    V_RECSTREAM *vstrm = (V_RECSTREAM *)xdrs->x_private;
+    struct v_rec_pos_t *pos = vrec_fpos(vstrm);
+    xdr_buffer *xbuf;
+    int ix;
 
-    while (len > 0) {
-        current = (size_t)((u_long)rstrm->out_boundry -
-                           (u_long)rstrm->out_finger);
-        current = (len < current) ? len : current;
-        memmove(rstrm->out_finger, addr, current);
-        rstrm->out_finger += current;
-        addr += current;
-        len -= current;
-        if (rstrm->out_finger == rstrm->out_boundry) {
-            rstrm->frag_sent = TRUE;
-            if (! flush_out(rstrm, FALSE))
-                return (FALSE);
-        }
+    for (ix = 0; ix < uio->xbs_cnt; ++ix) {
+        /* advance fill pointer, do not allocate buffers */
+        if (! vrec_next(vstrm, VREC_FPOS, VREC_FLAG_XTENDQ))
+            return (FALSE);
+        /* XXX for the moment, ignore xbs_flags */
+        xbuf = &(uio->xbs_buf[ix]);
+        pos->vrec->flags = VREC_FLAG_NONE; /* !RECLAIM */
+        pos->vrec->base = xbuf->xb_base;
+        pos->vrec->size = xbuf->xb_len;
+        pos->vrec->len = xbuf->xb_len;
+        pos->vrec->off = 0;
     }
-    return (TRUE);
-#else
-    abort();
-    return (FALSE);
-#endif /* 0 */
+    /* XXX move vrec_lpos(vstrm)? */
 }
 
 static u_int
@@ -865,6 +865,8 @@ xdr_vrec_endofrecord(XDR *xdrs, bool flush)
         return (vrec_flush_out(vstrm, TRUE));
     }
 
+    /* TODO: fix me! */
+
     /* XXX check */
     vstrm->st_u.out.frag_header =
         htonl((u_int32_t)(vstrm->st_u.out.frag_len | LAST_FRAG));
@@ -1026,8 +1028,10 @@ static bool vrec_get_input_segments(V_RECSTREAM *vstrm, int cnt)
     resid = cnt;
     for (ix = 0; ((ix < VREC_NFILL) && (resid > 0)); ++ix) {
         /* XXX */
-        if (! vrec_next(vstrm, VREC_FPOS, VREC_FLAG_XTENDQ))
+        if (! vrec_next(vstrm, VREC_FPOS, VREC_FLAG_XTENDQ|VREC_FLAG_BALLOC))
             return (FALSE);
+        /* XXX pos->vrec MAY have been allocated, but in advanced setups
+         * it may be pre-posted buffer */
         vrecs[ix] = pos->vrec;
         iov[ix].iov_base = vrecs[ix]->base;
         iov[ix].iov_len = MIN(vrecs[ix]->size, resid);

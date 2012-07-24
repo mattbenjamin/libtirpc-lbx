@@ -151,7 +151,7 @@ typedef struct __rpc_xdr {
         bool (*x_control)(struct __rpc_xdr *, int, void *);
         /* new vector and refcounted interfaces */
         bool (*x_getbufs)(struct __rpc_xdr *, xdr_uio *, u_int, u_int);
-        bool (*x_putbufs)(struct __rpc_xdr *, xdr_uio *, u_int, u_int);
+        bool (*x_putbufs)(struct __rpc_xdr *, xdr_uio *, u_int);
     } *x_ops;
     void *x_public; /* users' data */
     void *x_private; /* pointer to private data */
