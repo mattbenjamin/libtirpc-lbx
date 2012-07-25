@@ -1041,7 +1041,6 @@ vrec_set_input_fragment(V_RECSTREAM *vstrm)
     if (! vrec_get_input_fragment_bytes(vstrm, &addr, sizeof(header)))
         return (FALSE);
     header = ntohl(*((u_int32_t *)addr));
-    vstrm->st_u.in.last_frag = ((header & LAST_FRAG) == 0) ? FALSE : TRUE;
     /*
      * Sanity check. Try not to accept wildly incorrect
      * record sizes. Unfortunately, the only record size
@@ -1052,7 +1051,9 @@ vrec_set_input_fragment(V_RECSTREAM *vstrm)
      */
     if (header == 0)
         return(FALSE);
+    vstrm->st_u.in.last_frag = ((header & LAST_FRAG) == 0) ? FALSE : TRUE;
     vstrm->st_u.in.fbtbc = header & (~LAST_FRAG);
+    vstrm->st_u.in.haveheader = TRUE;
 
     return (TRUE);
 }
