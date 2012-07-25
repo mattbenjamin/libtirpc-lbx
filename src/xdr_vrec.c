@@ -153,6 +153,10 @@ init_discard_buffers(V_RECSTREAM *vstrm)
     int ix;
     struct iovec *iov;
 
+    /* this is a placeholder for a "null" mapping--ie, we'd expect
+     * readv to drain its socket buffer and never store or cache any
+     * value read into the segment */
+
     for (ix = 0; ix < VREC_NSINK; ix++) {
         iov = &(vstrm->iovsink[ix]);
         iov->iov_base = vrec_alloc_buffer(VREC_DISCARD_BUFSZ);
@@ -489,7 +493,7 @@ xdr_vrec_getbytes(XDR *xdrs, char *addr, u_int len)
         case XDR_DECODE:
             pos = vrec_lpos(vstrm);
         restart:
-            /* CASE 1:  re-consuming bytes in a stream (after SETPOS/rewind) */
+            /* CASE 1: consuming bytes in a stream (after SETPOS/rewind) */
             while (pos->loff < vstrm->st_u.in.buflen) {
                 while (len > 0) {
                     u_int delta = MIN(len, (pos->vrec->len - pos->boff));
@@ -498,6 +502,10 @@ xdr_vrec_getbytes(XDR *xdrs, char *addr, u_int len)
                             return (FALSE);
                         goto restart;
                     }
+                    /* in glibc 2.14+ x86_64, memcpy no longer tries to handle
+                     * overlapping areas, see Fedora Bug 691336 (NOTABUG);
+                     * we dont permit overlapping segments, so memcpy may be a
+                     * small win over memmove */
                     memcpy(addr, (pos->vrec->base + pos->boff), delta);
                     pos->loff += delta;
                     pos->boff += delta;
@@ -562,10 +570,7 @@ xdr_vrec_putbytes(XDR *xdrs, const char *addr, u_int len)
                             VREC_FLAG_XTENDQ|VREC_FLAG_BALLOC))
                 return (FALSE);
         }
-        /* in glibc 2.14+ x86_64, memcpy no longer tries to handle
-         * overlapping areas, see Fedora Bug 691336 (NOTABUG);
-         * we dont permit overlapping segments, so memcpy may be a
-         * small win */
+        /* ibid */
         memcpy((pos->vrec->base + pos->vrec->off), addr, delta);
         pos->vrec->off += delta;
         pos->boff += delta;
