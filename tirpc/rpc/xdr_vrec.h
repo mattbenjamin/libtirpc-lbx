@@ -119,7 +119,7 @@ struct v_rec_strm
     struct vrec_prealloc prealloc;
 
     /* discard buffers */
-    struct iovec iovsink[4];
+    struct iovec iovsink[VREC_NSINK];
 };
 
 typedef struct v_rec_strm V_RECSTREAM;
