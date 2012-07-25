@@ -72,6 +72,9 @@ enum xdr_vrec_direction {
     XDR_VREC_OUT,
 };
 
+#define VREC_NSINK 1
+#define VREC_DISCARD_BUFSZ 8192
+
 struct v_rec_strm
 {
     enum xdr_vrec_direction direction;
@@ -97,7 +100,6 @@ struct v_rec_strm
     /* stream state */
     union {
         struct {
-            struct iovec iovsink[4];
             u_long buflen; /* logical input buffer length */
             u_long fbtbc; /* fragment bytes to be consumed */
             u_int rbtbc; /* readahead bytes to be consumed */
@@ -115,11 +117,14 @@ struct v_rec_strm
 
     /* free lists */
     struct vrec_prealloc prealloc;
+
+    /* discard buffers */
+    struct iovec iovsink[4];
 };
 
 typedef struct v_rec_strm V_RECSTREAM;
 
-/* i/o provider inteface */
+/* provider inteface */
 
 #define VREC_FLAG_NONE          0x0000
 #define VREC_FLAG_NONBLOCK      0x0001

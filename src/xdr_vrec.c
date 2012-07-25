@@ -144,7 +144,6 @@ vrec_put_vrec(V_RECSTREAM *vstrm, struct v_rec *vrec)
 #endif /* 0 */
 #define vrec_free_buffer(addr) mem_free((addr), 0)
 
-#define VREC_NSINK 1
 #define VREC_NFILL 6
 #define VREC_MAXBUFS 24
 
@@ -155,8 +154,8 @@ init_discard_buffers(V_RECSTREAM *vstrm)
     struct iovec *iov;
 
     for (ix = 0; ix < VREC_NSINK; ix++) {
-        iov = &(vstrm->st_u.in.iovsink[ix]);
-        iov->iov_base = vrec_alloc_buffer(vstrm->def_bsize);
+        iov = &(vstrm->iovsink[ix]);
+        iov->iov_base = vrec_alloc_buffer(VREC_DISCARD_BUFSZ);
         iov->iov_len = 0;
     }
 }
@@ -168,7 +167,7 @@ free_discard_buffers(V_RECSTREAM *vstrm)
     struct iovec *iov;
 
     for (ix = 0; ix < VREC_NSINK; ix++) {
-        iov = &(vstrm->st_u.in.iovsink[ix]);
+        iov = &(vstrm->iovsink[ix]);
         vrec_free_buffer(iov->iov_base);
     }
 }
@@ -1063,12 +1062,12 @@ vrec_skip_input_bytes(V_RECSTREAM *vstrm, long cnt)
 
     while (cnt > 0) {
         for (ix = 0, resid = cnt; ((resid > 0) && (ix < VREC_NSINK)); ++ix) {
-            iov = &(vstrm->st_u.in.iovsink[ix]);
-            iov->iov_len = MIN(resid, vstrm->def_bsize);
+            iov = &(vstrm->iovsink[ix]);
+            iov->iov_len = MIN(resid, VREC_DISCARD_BUFSZ);
             resid -= iov->iov_len;
         }
         nbytes = vstrm->ops.readv(vstrm->vp_handle,
-                                  (struct iovec *) &(vstrm->st_u.in.iovsink),
+                                  (struct iovec *) &(vstrm->iovsink),
                                   ix+1 /* iovcnt */,
                                   VREC_FLAG_NONE);
         cnt -= nbytes;
@@ -1097,8 +1096,8 @@ static bool vrec_get_input_segments(V_RECSTREAM *vstrm, int cnt)
         iov[ix].iov_len = MIN(vrecs[ix]->size, resid);
         resid -= iov[ix].iov_len;
     }
-    resid = vstrm->ops.readv(vstrm->vp_handle, iov, ix, VREC_FLAG_NONE);
     /* XXX callers will re-try if we get a short read */
+    resid = vstrm->ops.readv(vstrm->vp_handle, iov, ix, VREC_FLAG_NONE);
     for (ix = 0; ((ix < VREC_NFILL) && (resid > 0)); ++ix) {
         vstrm->st_u.in.buflen += iov[ix].iov_len;
         vrecs[ix]->len = iov[ix].iov_len;
