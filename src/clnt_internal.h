@@ -48,7 +48,7 @@ struct ct_wait_entry {
 struct vc_fd_rec
 {
     int fd_k;
-    int32_t refcount;
+    int32_t refcnt;
     int32_t lock_flag_value; /* state of lock at fd */
     struct opr_rbtree_node node_k;
     mutex_t mtx;
