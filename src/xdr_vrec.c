@@ -469,6 +469,7 @@ xdr_vrec_putlong(XDR *xdrs, const long *lp)
         (int32_t)htonl((u_int32_t)(*lp));
 
     pos->vrec->off += sizeof(int32_t);
+    pos->vrec->len += sizeof(int32_t);
     pos->boff += sizeof(int32_t);
     vstrm->st_u.out.frag_len += sizeof(int32_t);
 
@@ -573,6 +574,7 @@ xdr_vrec_putbytes(XDR *xdrs, const char *addr, u_int len)
         /* ibid */
         memcpy((pos->vrec->base + pos->vrec->off), addr, delta);
         pos->vrec->off += delta;
+        pos->vrec->len += delta;
         pos->boff += delta;
         vstrm->st_u.out.frag_len += delta;
         len -= delta;
