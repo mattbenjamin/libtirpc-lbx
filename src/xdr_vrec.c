@@ -160,7 +160,7 @@ init_discard_buffers(V_RECSTREAM *vstrm)
     for (ix = 0; ix < VREC_NSINK; ix++) {
         iov = &(vstrm->iovsink[ix]);
         iov->iov_base = vrec_alloc_buffer(VREC_DISCARD_BUFSZ);
-        iov->iov_len = 0;
+        iov->iov_len = VREC_DISCARD_BUFSZ;
     }
 }
 
