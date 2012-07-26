@@ -301,6 +301,10 @@ vrec_truncate_input_q(V_RECSTREAM *vstrm, int max)
 
     switch (vstrm->direction) {
     case XDR_VREC_IN:
+        vstrm->st_u.in.buflen = 0;
+        vstrm->st_u.in.fbtbc = 0;
+        vstrm->st_u.in.last_frag = false;
+        vstrm->st_u.in.haveheader = false;
         break;
     case XDR_VREC_OUT:
         vstrm->st_u.out.frag_len = 0;

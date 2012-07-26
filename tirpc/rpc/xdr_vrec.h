@@ -104,7 +104,6 @@ struct v_rec_strm
             u_long fbtbc; /* fragment bytes to be consumed */
             u_int rbtbc; /* readahead bytes to be consumed */
             long readahead_bytes; /* bytes to read ahead across fragments */
-            u_int32_t frag_header;
             bool last_frag;
             bool haveheader;
         } in;
