@@ -299,8 +299,8 @@ vrec_truncate_input_q(V_RECSTREAM *vstrm, int max)
     case XDR_VREC_IN:
         vstrm->st_u.in.buflen = 0;
         vstrm->st_u.in.fbtbc = 0;
-        vstrm->st_u.in.last_frag = false;
-        vstrm->st_u.in.haveheader = false;
+        vstrm->st_u.in.last_frag = FALSE;
+        vstrm->st_u.in.haveheader = FALSE;
         break;
     case XDR_VREC_OUT:
         vstrm->st_u.out.frag_len = 0;
@@ -435,13 +435,19 @@ static bool
 xdr_vrec_getlong(XDR *xdrs,  long *lp)
 {
     V_RECSTREAM *vstrm = (V_RECSTREAM *)xdrs->x_private;
+    struct v_rec_pos_t *pos = vrec_lpos(vstrm);
     int32_t *buf = NULL;
 
     /* first try the inline, fast case */
-    if (vstrm->st_u.in.fbtbc >= sizeof(int32_t)) {
-        struct v_rec_pos_t *pos = vrec_lpos(vstrm);
+    if ((pos->boff + sizeof(int32_t)) <= pos->vrec->len) {
         buf = (int32_t *)(void *)(pos->vrec->base + pos->boff);
         *lp = (long)ntohl(*buf);
+        pos->boff += sizeof(int32_t);
+        pos->loff += sizeof(int32_t);
+        /* next vrec? */
+        if (pos->boff >= pos->vrec->len) /* XXX == */
+            (void) vrec_next(vstrm, VREC_LPOS, VREC_FLAG_NONE);
+        return (TRUE);
     } else {
         if (! xdr_vrec_getbytes(
                 xdrs, (char *)(void *)buf, sizeof(int32_t)))
@@ -886,7 +892,6 @@ bool
 xdr_vrec_eof(XDR *xdrs)
 {
     V_RECSTREAM *vstrm = (V_RECSTREAM *)(xdrs->x_private);
-    int stop_here = 0;
 
     switch (vstrm->direction) {
     case XDR_VREC_IN:
@@ -901,7 +906,6 @@ xdr_vrec_eof(XDR *xdrs)
                     (! vrec_set_input_fragment(vstrm)))
                     return (TRUE);
             }
-            stop_here = 1;
             break;
         case XDR_ENCODE:
         default:
@@ -1031,6 +1035,7 @@ vrec_get_input_fragment_bytes(V_RECSTREAM *vstrm, char **addr, int len)
             pos = vrec_fpos(vstrm);
             *addr = (void *)(pos->vrec->base + pos->boff);
             pos->boff += len;
+            vstrm->st_u.in.rbtbc -= len;
             return (TRUE);
         }
     }
@@ -1045,7 +1050,6 @@ vrec_set_input_fragment(V_RECSTREAM *vstrm)
 
     if (! vrec_get_input_fragment_bytes(vstrm, &addr, sizeof(header)))
         return (FALSE);
-    header = ntohl(*((u_int32_t *)addr));
     /*
      * Sanity check. Try not to accept wildly incorrect
      * record sizes. Unfortunately, the only record size
@@ -1054,8 +1058,10 @@ vrec_set_input_fragment(V_RECSTREAM *vstrm)
      * but we don't have any way to be certain that they aren't
      * what the client actually intended to send us.
      */
+    header = ntohl(*((u_int32_t *)addr));
     if (header == 0)
         return(FALSE);
+    /* decode and clear LAST_FRAG bit */
     vstrm->st_u.in.last_frag = ((header & LAST_FRAG) == 0) ? FALSE : TRUE;
     vstrm->st_u.in.fbtbc = header & (~LAST_FRAG);
     vstrm->st_u.in.haveheader = TRUE;
@@ -1111,6 +1117,7 @@ static bool vrec_get_input_segments(V_RECSTREAM *vstrm, int cnt)
     resid = vstrm->ops.readv(vstrm->vp_handle, iov, ix, VREC_FLAG_NONE);
     for (ix = 0; ((ix < VREC_NFILL) && (resid > 0)); ++ix) {
         vstrm->st_u.in.buflen += iov[ix].iov_len;
+        vstrm->st_u.in.fbtbc -= iov[ix].iov_len;
         vrecs[ix]->len = iov[ix].iov_len;
         resid -= iov[ix].iov_len;
     }
