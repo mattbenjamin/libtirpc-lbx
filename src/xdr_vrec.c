@@ -960,7 +960,7 @@ vrec_flush_segments(V_RECSTREAM *vstrm, struct iovec *iov, int iovcnt,
 
     while (resid > 0) {
         /* advance iov */
-        for (ix = 0; ((nbytes > 0) && (ix < iovcnt)); ++ix) {
+        for (ix = 0, tiov = iov; ((nbytes > 0) && (ix < iovcnt)); ++ix) {
             tiov = iov+ix;
             if (tiov->iov_len > nbytes) {
                 tiov->iov_base += nbytes;
