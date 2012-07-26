@@ -126,11 +126,10 @@ typedef struct v_rec_strm V_RECSTREAM;
 /* provider inteface */
 
 #define VREC_FLAG_NONE          0x0000
-#define VREC_FLAG_NONBLOCK      0x0001
-#define VREC_FLAG_RECLAIM       0x0002
-#define VREC_FLAG_BUFQ          0x0004
-#define VREC_FLAG_XTENDQ        0x0008
-#define VREC_FLAG_BALLOC        0x0010
+#define VREC_FLAG_RECLAIM       0x0001
+#define VREC_FLAG_BUFQ          0x0002
+#define VREC_FLAG_XTENDQ        0x0004
+#define VREC_FLAG_BALLOC        0x0008
 
 /* vector equivalents */
 

@@ -230,10 +230,6 @@ vrec_readahead_bytes(V_RECSTREAM *vstrm, int len, u_int flags)
     return (nbytes);
 }
 
-#define vrec_nb_readahead(vstrm) \
-    vrec_readahead_bytes((vstrm), (vstrm)->st_u.in.readahead_bytes, \
-                         VREC_FLAG_NONBLOCK);
-
 enum vrec_cursor
 {
     VREC_FPOS,
@@ -890,6 +886,7 @@ bool
 xdr_vrec_eof(XDR *xdrs)
 {
     V_RECSTREAM *vstrm = (V_RECSTREAM *)(xdrs->x_private);
+    int stop_here = 0;
 
     switch (vstrm->direction) {
     case XDR_VREC_IN:
@@ -904,6 +901,7 @@ xdr_vrec_eof(XDR *xdrs)
                     (! vrec_set_input_fragment(vstrm)))
                     return (TRUE);
             }
+            stop_here = 1;
             break;
         case XDR_ENCODE:
         default:

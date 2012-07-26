@@ -908,25 +908,11 @@ readv_vc(void *xprtp, struct iovec *iov, int iovcnt, u_int flags)
     struct pollfd pollfd;
     struct cf_conn *cd;
     size_t nbytes = -1;
-    bool reblock = FALSE;
-    int fflags;
 
     xprt = (SVCXPRT *)xprtp;
     assert(xprt != NULL);
 
     cd = (struct cf_conn *)xprt->xp_p1;
-
-    /* support readahead */
-    if (flags & VREC_FLAG_NONBLOCK) {
-        if (! cd->nonblock) {
-            fflags = fcntl(xprt->xp_fd, F_GETFL, 0);
-            if (fflags == -1)
-                goto fatal_err;
-            if (fcntl(xprt->xp_fd, F_SETFL, fflags | O_NONBLOCK) == -1)
-                goto fatal_err;
-            reblock = TRUE;
-        }
-    }
 
     do {
         pollfd.fd = xprt->xp_fd;
@@ -952,10 +938,6 @@ readv_vc(void *xprtp, struct iovec *iov, int iovcnt, u_int flags)
 fatal_err:
     ((struct cf_conn *)(xprt->xp_p1))->strm_stat = XPRT_DIED;
 out:
-    if(reblock) {
-        (void) fcntl(xprt->xp_fd, F_SETFL, fflags & ~O_NONBLOCK);
-    }
-
     return (nbytes);
 }
 
