@@ -102,7 +102,6 @@ struct v_rec_strm
         struct {
             u_long buflen; /* logical input buffer length */
             u_long fbtbc; /* fragment bytes to be consumed */
-            u_int rbtbc; /* readahead bytes to be consumed */
             long readahead_bytes; /* bytes to read ahead across fragments */
             bool last_frag;
             bool haveheader;

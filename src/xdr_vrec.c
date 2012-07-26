@@ -80,10 +80,26 @@ static const struct  xdr_ops xdr_vrec_ops = {
 #define LAST_FRAG ((u_int32_t)(1 << 31))
 
 static bool vrec_flush_out(V_RECSTREAM *, bool);
-static bool vrec_get_input_fragment_bytes(V_RECSTREAM *, char **, int);
 static bool vrec_set_input_fragment(V_RECSTREAM *);
 static bool vrec_skip_input_bytes(V_RECSTREAM *, long);
 static bool vrec_get_input_segments(V_RECSTREAM *, int);
+
+#define reset_pos(pos) \
+    do { \
+        (pos)->loff = 0; \
+        (pos)->bpos = 0; \
+        (pos)->boff = 0; \
+    } while (0);
+
+/* not intended to be general--we know fpos->vrec is head of queue */
+#define init_lpos(lpos, fpos) \
+    do { \
+        (lpos)->vrec = (fpos)->vrec; \
+        (lpos)->loff = 0; \
+        (lpos)->bpos = 0; \
+        (lpos)->boff = 0; \
+    } while (0);
+
 
 /* XXX might not be faster than jemalloc, &c? */
 static inline void
@@ -224,7 +240,6 @@ vrec_readahead_bytes(V_RECSTREAM *vstrm, int len, u_int flags)
     iov->iov_base = pos->vrec->base + pos->vrec->off;
     iov->iov_len = len;
     nbytes = vstrm->ops.readv(vstrm->vp_handle, iov, 1, flags);
-    vstrm->st_u.in.rbtbc += nbytes;
     pos->vrec->len += nbytes;
 
     return (nbytes);
@@ -244,7 +259,6 @@ static inline void
 vrec_stream_reset(V_RECSTREAM *vstrm, enum vrec_cursor wh_pos)
 {
     struct v_rec_pos_t *pos;
-    struct v_rec *vrec;
 
     switch (wh_pos) {
     case VREC_FPOS:
@@ -263,11 +277,8 @@ vrec_stream_reset(V_RECSTREAM *vstrm, enum vrec_cursor wh_pos)
         break;
     }
 
-    vrec = TAILQ_FIRST(&vstrm->ioq.q);
-    pos->vrec = vrec;
-    pos->loff = 0;
-    pos->bpos = 0; /* first position */
-    pos->boff = 0;
+    reset_pos(pos);
+    pos->vrec = TAILQ_FIRST(&vstrm->ioq.q);
 }
 
 static inline void
@@ -407,7 +418,6 @@ xdr_vrec_create(XDR *xdrs,
         vstrm->ops.readv = xreadv;
         vstrm->st_u.in.readahead_bytes = 1200; /* XXX PMTU? */
         vstrm->st_u.in.fbtbc = 0;
-        vstrm->st_u.in.rbtbc = 0;
         vstrm->st_u.in.haveheader = FALSE;
         vstrm->st_u.in.last_frag = TRUE;
         break;
@@ -860,13 +870,12 @@ xdr_vrec_skiprecord(XDR *xdrs)
             /* bound queue size and support future mapped reads */
             vrec_truncate_input_q(vstrm, 8);
             vstrm->st_u.in.fbtbc = 0;
-            vstrm->st_u.in.rbtbc = 0;
             if (! vstrm->st_u.in.haveheader) {
                 if (! vrec_set_input_fragment(vstrm))
                     return (FALSE);
             }
             /* reset logical stream position */
-            *(vrec_lpos(vstrm)) = *(vrec_fpos(vstrm));
+            init_lpos(vrec_lpos(vstrm), vrec_fpos(vstrm));
             break;
         case XDR_ENCODE:
         default:
@@ -1020,36 +1029,24 @@ vrec_flush_out(V_RECSTREAM *vstrm, bool eor)
     return (TRUE);
 }
 
-/* Stream read operation intended for small, e.g., header-length
- * reads ONLY.  Note:  len is required to be less than the queue
- * default buffer size. */
-static bool
-vrec_get_input_fragment_bytes(V_RECSTREAM *vstrm, char **addr, int len)
-{
-    struct v_rec_pos_t *pos;
-
-    if (! vstrm->st_u.in.rbtbc) {
-        vrec_readahead_bytes(vstrm, vstrm->st_u.in.readahead_bytes,
-                             VREC_FLAG_NONE);
-        if (len <= vstrm->st_u.in.rbtbc) {
-            pos = vrec_fpos(vstrm);
-            *addr = (void *)(pos->vrec->base + pos->boff);
-            pos->boff += len;
-            vstrm->st_u.in.rbtbc -= len;
-            return (TRUE);
-        }
-    }
-    return (FALSE);
-}
-
 static bool  /* next two bytes of the input stream are treated as a header */
 vrec_set_input_fragment(V_RECSTREAM *vstrm)
 {
+    struct v_rec_pos_t *pos;
+    struct iovec iov[2];
     u_int32_t header;
-    char *addr;
+    uint32_t nbytes;
 
-    if (! vrec_get_input_fragment_bytes(vstrm, &addr, sizeof(header)))
-        return (FALSE);
+    pos = vrec_fpos(vstrm); /* XXX multiple fragments? */
+
+    /* fragment header */
+    iov[0].iov_base = &header;
+    iov[0].iov_len = sizeof(u_int32_t);
+
+    /* data up to readahead bytes */
+    iov[1].iov_base = pos->vrec->base + pos->vrec->off;
+    iov[1].iov_len = (vstrm->st_u.in.readahead_bytes - sizeof(u_int32_t));
+
     /*
      * Sanity check. Try not to accept wildly incorrect
      * record sizes. Unfortunately, the only record size
@@ -1058,9 +1055,12 @@ vrec_set_input_fragment(V_RECSTREAM *vstrm)
      * but we don't have any way to be certain that they aren't
      * what the client actually intended to send us.
      */
-    header = ntohl(*((u_int32_t *)addr));
+    nbytes = vstrm->ops.readv(vstrm->vp_handle, iov, 2, VREC_FLAG_NONE);
+    pos->vrec->len += (nbytes - sizeof(u_int32_t));
+    header = ntohl(header);
     if (header == 0)
         return(FALSE);
+
     /* decode and clear LAST_FRAG bit */
     vstrm->st_u.in.last_frag = ((header & LAST_FRAG) == 0) ? FALSE : TRUE;
     vstrm->st_u.in.fbtbc = header & (~LAST_FRAG);
