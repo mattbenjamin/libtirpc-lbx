@@ -728,10 +728,11 @@ xdr_vrec_setpos(XDR *xdrs, u_int pos)
     V_RECSTREAM *vstrm = (V_RECSTREAM *)(xdrs->x_private);
     struct v_rec_pos_t *lpos = vrec_lpos(vstrm);
     struct v_rec *vrec;
-    u_int resid = 0;
+    u_int resid;
     int ix;
 
     ix = 0;
+    resid = 0;
     TAILQ_FOREACH(vrec, &(vstrm->ioq.q), ioq) {
         if ((vrec->len + resid) > pos) {
             lpos->vrec = vrec;
