@@ -387,6 +387,9 @@ xdr_vrec_create(XDR *xdrs,
         return;
     }
 
+    init_prealloc_queues(vstrm);
+    init_discard_buffers(vstrm);
+
     xdrs->x_ops = &xdr_vrec_ops;
     xdrs->x_private = vstrm;
 
@@ -420,9 +423,6 @@ xdr_vrec_create(XDR *xdrs,
         abort();
         break;
     }
-
-    init_prealloc_queues(vstrm);
-    init_discard_buffers(vstrm);
 
     return;
 }
