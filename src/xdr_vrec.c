@@ -506,7 +506,7 @@ xdr_vrec_getlong(XDR *xdrs,  long *lp)
         case XDR_ENCODE:
             /* CASE 1:  we can only be re-consuming bytes in a stream
              * (after SETPOS/rewind) */
-            if (pos->loff < vstrm->st_u.in.buflen) {
+            if (pos->loff < vstrm->st_u.out.frag_len) {
             restart_2:
                 /* CASE 1.1: first try the inline, fast case */
                 if ((pos->boff + sizeof(int32_t)) <= pos->vrec->len) {
@@ -648,24 +648,34 @@ xdr_vrec_putbytes(XDR *xdrs, const char *addr, u_int len)
     struct v_rec_pos_t *pos;
     int delta;
 
-    while (len > 0) {
-        pos = vrec_fpos(vstrm);
-        delta = pos->vrec->size - pos->vrec->len;
-        if (unlikely(! delta)) {
-            /* advance fill pointer */
-            if (! vrec_next(vstrm, VREC_FPOS,
-                            VREC_FLAG_XTENDQ|VREC_FLAG_BALLOC))
-                return (FALSE);
+    switch (vstrm->direction) {
+    case XDR_VREC_IN:
+        abort();
+        break;
+    case XDR_VREC_OUT:
+        while (len > 0) {
+            pos = vrec_fpos(vstrm);
+            delta = pos->vrec->size - pos->vrec->len;
+            if (unlikely(! delta)) {
+                /* advance fill pointer */
+                if (! vrec_next(vstrm, VREC_FPOS,
+                                VREC_FLAG_XTENDQ|VREC_FLAG_BALLOC))
+                    return (FALSE);
+            }
+            /* ibid */
+            memcpy((pos->vrec->base + pos->vrec->off), addr, delta);
+            pos->vrec->off += delta;
+            pos->vrec->len += delta;
+            pos->boff += delta;
+            vstrm->st_u.out.frag_len += delta;
+            len -= delta;
         }
-        /* ibid */
-        memcpy((pos->vrec->base + pos->vrec->off), addr, delta);
-        pos->vrec->off += delta;
-        pos->vrec->len += delta;
-        pos->boff += delta;
-        vstrm->st_u.out.frag_len += delta;
-        len -= delta;
+        init_lpos(vrec_lpos(vstrm), pos);
+        break;
+    default:
+        abort();
+        break;
     }
-
     return (TRUE);
 }
 
@@ -761,7 +771,7 @@ static bool
 xdr_vrec_putbufs(XDR *xdrs, xdr_uio *uio, u_int flags)
 {
     V_RECSTREAM *vstrm = (V_RECSTREAM *)xdrs->x_private;
-    struct v_rec_pos_t *pos = vrec_fpos(vstrm);
+    struct v_rec_pos_t *fpos = vrec_fpos(vstrm);
     xdr_buffer *xbuf;
     int ix;
 
@@ -786,14 +796,16 @@ xdr_vrec_putbufs(XDR *xdrs, xdr_uio *uio, u_int flags)
             if (! vrec_next(vstrm, VREC_FPOS, VREC_FLAG_XTENDQ))
                 return (FALSE);
             xbuf = &(uio->xbs_buf[ix]);
-            pos->vrec->flags = VREC_FLAG_NONE; /* !RECLAIM */
-            pos->vrec->refcnt = (xbuf->xb_flags & XBS_FLAG_GIFT) ? 0 : 1;
-            pos->vrec->base = xbuf->xb_base;
-            pos->vrec->size = xbuf->xb_len;
-            pos->vrec->len = xbuf->xb_len;
-            pos->vrec->off = 0;
+            vstrm->st_u.out.frag_len += xbuf->xb_len;
+            fpos->loff += xbuf->xb_len;
+            fpos->vrec->flags = VREC_FLAG_NONE; /* !RECLAIM */
+            fpos->vrec->refcnt = (xbuf->xb_flags & XBS_FLAG_GIFT) ? 0 : 1;
+            fpos->vrec->base = xbuf->xb_base;
+            fpos->vrec->size = xbuf->xb_len;
+            fpos->vrec->len = xbuf->xb_len;
+            fpos->vrec->off = 0;
         }
-        /* XXX move vrec_lpos(vstrm)? */
+        init_lpos(vrec_lpos(vstrm), fpos);
         break;
     }
     return (TRUE);
@@ -837,7 +849,7 @@ static int32_t *
 xdr_vrec_inline(XDR *xdrs, u_int len)
 {
     V_RECSTREAM *vstrm = (V_RECSTREAM *)xdrs->x_private;
-    struct v_rec_pos_t *pos = vrec_lpos(vstrm);
+    struct v_rec_pos_t *pos;
     int32_t *buf = NULL;
 
     /* we keep xdrrec's inline concept mostly intact.  the function
@@ -852,6 +864,7 @@ xdr_vrec_inline(XDR *xdrs, u_int len)
             abort();
             break;
         case XDR_DECODE:
+            pos = vrec_lpos(vstrm);
             if (vstrm->st_u.in.fbtbc >= len) {
                 if ((pos->boff + len) <= pos->vrec->size) {
                     buf = (int32_t *)(void *)(pos->vrec->base + pos->boff);
@@ -869,10 +882,13 @@ xdr_vrec_inline(XDR *xdrs, u_int len)
     case XDR_VREC_OUT:
         switch (xdrs->x_op) {
         case XDR_ENCODE:
+            pos = vrec_fpos(vstrm);
             if ((pos->boff + len) <= pos->vrec->size) {
                 buf = (int32_t *)(void *)(pos->vrec->base + pos->boff);
+                vstrm->st_u.out.frag_len += len;
                 pos->boff += len;
             }
+            init_lpos(vrec_lpos(vstrm), pos);
             break;
         case XDR_DECODE:
         default:
