@@ -453,22 +453,87 @@ xdr_vrec_getlong(XDR *xdrs,  long *lp)
     struct v_rec_pos_t *pos = vrec_lpos(vstrm);
     int32_t *buf = NULL;
 
-    /* first try the inline, fast case */
-    if ((pos->boff + sizeof(int32_t)) <= pos->vrec->len) {
-        buf = (int32_t *)(void *)(pos->vrec->base + pos->boff);
-        *lp = (long)ntohl(*buf);
-        pos->boff += sizeof(int32_t);
-        pos->loff += sizeof(int32_t);
-        /* next vrec? */
-        if (pos->boff >= pos->vrec->len) /* XXX == */
-            (void) vrec_next(vstrm, VREC_LPOS, VREC_FLAG_NONE);
-        return (TRUE);
-    } else {
-        if (! xdr_vrec_getbytes(
-                xdrs, (char *)(void *)buf, sizeof(int32_t)))
-            return (FALSE);
-        *lp = (long)ntohl(*buf);
+    switch (vstrm->direction) {
+    case XDR_VREC_IN:
+        switch (xdrs->x_op) {
+        case XDR_ENCODE:
+            abort();
+            break;
+        case XDR_DECODE:
+            /* CASE 1:  re-consuming bytes in a stream (after SETPOS/rewind) */
+            if (pos->loff < vstrm->st_u.in.buflen) {
+            restart_1:
+                /* CASE 1.1: first try the inline, fast case */
+                if ((pos->boff + sizeof(int32_t)) <= pos->vrec->len) {
+                    buf = (int32_t *)(void *)(pos->vrec->base + pos->boff);
+                    *lp = (long)ntohl(*buf);
+                    pos->boff += sizeof(int32_t);
+                    pos->loff += sizeof(int32_t);
+                    /* next vrec? */
+                    if (pos->boff >= pos->vrec->len) /* XXX == */
+                        (void) vrec_next(vstrm, VREC_LPOS, VREC_FLAG_NONE);
+                } else {
+                    /* CASE 1.2: vrec_next */
+                    (void) vrec_next(vstrm, VREC_LPOS, VREC_FLAG_NONE);
+                    goto restart_1;
+                }
+            } else {
+                /* CASE 2: reading into the stream */
+                /* CASE 2.1: first try the inline, fast case */
+                if ((pos->boff + sizeof(int32_t)) <= pos->vrec->len) {
+                    buf = (int32_t *)(void *)(pos->vrec->base + pos->boff);
+                    *lp = (long)ntohl(*buf);
+                    pos->boff += sizeof(int32_t);
+                    pos->loff += sizeof(int32_t);
+                    vstrm->st_u.in.fbtbc -= sizeof(int32_t);
+                    vstrm->st_u.in.buflen += sizeof(int32_t);
+                } else {
+                    /* CASE 2.2: need getbytes */
+                    if (! xdr_vrec_getbytes(
+                            xdrs, (char *)(void *)buf, sizeof(int32_t)))
+                        return (FALSE);
+                    *lp = (long)ntohl(*buf);
+                }
+            }
+            break;
+        default:
+            abort();
+            break;
+        }
+        break;
+    case XDR_VREC_OUT:
+        switch (xdrs->x_op) {
+        case XDR_ENCODE:
+            /* CASE 1:  we can only be re-consuming bytes in a stream
+             * (after SETPOS/rewind) */
+            if (pos->loff < vstrm->st_u.in.buflen) {
+            restart_2:
+                /* CASE 1.1: first try the inline, fast case */
+                if ((pos->boff + sizeof(int32_t)) <= pos->vrec->len) {
+                    buf = (int32_t *)(void *)(pos->vrec->base + pos->boff);
+                    *lp = (long)ntohl(*buf);
+                    pos->boff += sizeof(int32_t);
+                    pos->loff += sizeof(int32_t);
+                } else {
+                    /* CASE 1.2: vrec_next */
+                    (void) vrec_next(vstrm, VREC_LPOS, VREC_FLAG_NONE);
+                    goto restart_2;
+                }
+            } else
+                return (FALSE);
+            break;
+        case XDR_DECODE:
+        default:
+            abort();
+            break;
+        }
+        break;
+    default:
+        abort();
+        break;
     }
+
+    /* assert(len == 0); */
     return (TRUE);
 }
 
@@ -792,6 +857,7 @@ xdr_vrec_inline(XDR *xdrs, u_int len)
                     buf = (int32_t *)(void *)(pos->vrec->base + pos->boff);
                     vstrm->st_u.in.fbtbc -= len;
                     pos->boff += len;
+                    pos->loff += len;
                 }
             }
             break;
@@ -864,6 +930,7 @@ xdr_vrec_skiprecord(XDR *xdrs)
         switch (xdrs->x_op) {
         case XDR_DECODE:
         restart:
+            /* ARG! we need to know whether we have a new record... */
             /* CASE 1: xdr_vrec_eof read the next header */
             if (vstrm->st_u.in.next_frag) {
                 vstrm->st_u.in.next_frag = FALSE; /* clear flag */
@@ -880,11 +947,12 @@ xdr_vrec_skiprecord(XDR *xdrs)
                                                      vstrm->st_u.in.fbtbc);
                         goto restart;
                     }
-                    /* CASE 4: fbtbc==0 */
+                    /* CASE 4: fbtbc==0, last_frag==TRUE */
                     if ( vstrm->st_u.in.last_frag) {
                         if (! vrec_set_input_fragment(vstrm))
                             return (FALSE);
                     } else {
+                        /* CASE 5: fbtbc==0, last_frag==FALSE */
                         (void) vrec_skip_input_bytes(vstrm,
                                                      vstrm->st_u.in.fbtbc);
                         goto restart;
