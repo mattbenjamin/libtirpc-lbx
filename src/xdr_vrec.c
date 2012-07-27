@@ -81,7 +81,7 @@ static const struct  xdr_ops xdr_vrec_ops = {
 
 static bool vrec_flush_out(V_RECSTREAM *, bool);
 static bool vrec_set_input_fragment(V_RECSTREAM *);
-static void vrec_skip_input_bytes(V_RECSTREAM *, long);
+static bool vrec_skip_input_bytes(V_RECSTREAM *, long);
 static bool vrec_get_input_segments(V_RECSTREAM *, int);
 
 #define reset_pos(pos) \
@@ -178,6 +178,11 @@ init_discard_buffers(V_RECSTREAM *vstrm)
         iov->iov_base = vrec_alloc_buffer(VREC_DISCARD_BUFSZ);
         iov->iov_len = VREC_DISCARD_BUFSZ;
     }
+
+    /* the last iovec is used to peek into the next fragment */
+    iov[VREC_STATIC_FRAG].iov_base = NULL; /* varies */
+    iov[VREC_STATIC_FRAG].iov_len = sizeof(u_int32_t);
+
 }
 
 static inline void
@@ -292,26 +297,23 @@ vrec_truncate_input_q(V_RECSTREAM *vstrm, int max)
      * module, bit VREC_FLAG_RECLAIM is set in vrec->flags.
      */
 
-    /* enforce upper bound on ioq size.
-     */
-    while (unlikely(vstrm->ioq.size > max)) {
-        vrec = TAILQ_LAST(&vstrm->ioq.q, vrq_tailq);
-        TAILQ_REMOVE(&vstrm->ioq.q, vrec, ioq);
-        (vstrm->ioq.size)--;
-        /* almost certainly recycles */
-        vrec_rele(vstrm, vrec);
-    }
-
     /* ideally, the first read on the stream */
     if (unlikely(vstrm->ioq.size == 0))
         vrec_init_ioq(vstrm);
+    else {
+        /* enforce upper bound on ioq size.
+         */
+        while (unlikely(vstrm->ioq.size > max)) {
+            vrec = TAILQ_LAST(&vstrm->ioq.q, vrq_tailq);
+            TAILQ_REMOVE(&vstrm->ioq.q, vrec, ioq);
+            (vstrm->ioq.size)--;
+            /* almost certainly recycles */
+            vrec_rele(vstrm, vrec);
+        }
+    }
 
     switch (vstrm->direction) {
     case XDR_VREC_IN:
-        vstrm->st_u.in.buflen = 0;
-        vstrm->st_u.in.fbtbc = 0;
-        vstrm->st_u.in.last_frag = FALSE;
-        vstrm->st_u.in.haveheader = FALSE;
         break;
     case XDR_VREC_OUT:
         vstrm->st_u.out.frag_len = 0;
@@ -416,18 +418,21 @@ xdr_vrec_create(XDR *xdrs,
     switch (direction) {
     case XDR_VREC_IN:
         vstrm->ops.readv = xreadv;
+        vrec_init_ioq(vstrm);
         vstrm->st_u.in.readahead_bytes = 1200; /* XXX PMTU? */
         vstrm->st_u.in.fbtbc = 0;
+        vstrm->st_u.in.buflen = 0;
         vstrm->st_u.in.haveheader = FALSE;
-        vstrm->st_u.in.last_frag = TRUE;
+        vstrm->st_u.in.last_frag = FALSE; /* do NOT use if !haveheader */
+        vrec_truncate_input_q(vstrm, 8);
         break;
     case XDR_VREC_OUT:
         vstrm->ops.writev = xwritev;
         vrec_init_ioq(vstrm);
         vrec_truncate_output_q(vstrm, 8);
-
-        /* XXX finish */
+        vstrm->st_u.out.frag_len = 0;
         vstrm->st_u.out.frag_sent = FALSE;
+        vrec_truncate_output_q(vstrm, 8);
         break;
     default:
         abort();
@@ -858,23 +863,36 @@ xdr_vrec_skiprecord(XDR *xdrs)
     case XDR_VREC_IN:
         switch (xdrs->x_op) {
         case XDR_DECODE:
-            /* stream reset */
-            while (vstrm->st_u.in.fbtbc > 0 ||
-                   (! vstrm->st_u.in.last_frag)) {
-                (void) vrec_skip_input_bytes(vstrm, vstrm->st_u.in.fbtbc,
-                                             VREC_FLAG_NONE);
-                if ((! vstrm->st_u.in.last_frag) &&
-                    (! vrec_set_input_fragment(vstrm)))
-                    return (FALSE);
-            }
+        restart:
+            /* CASE 1: xdr_vrec_eof read the next header */
+            if (vstrm->st_u.in.next_frag) {
+                vstrm->st_u.in.next_frag = FALSE; /* clear flag */
+            } else {
+                /* CASE 2: we have nothing */
+                if (! vstrm->st_u.in.haveheader) {
+                    if (! vrec_set_input_fragment(vstrm))
+                        return (FALSE);
+                } else {
+                    /* haveheader=TRUE */
+                    if (vstrm->st_u.in.fbtbc) {
+                        /* CASE 3: have fbtbc (may be last_frag) */
+                        (void) vrec_skip_input_bytes(vstrm,
+                                                     vstrm->st_u.in.fbtbc);
+                        goto restart;
+                    }
+                    /* CASE 4: fbtbc==0 */
+                    if ( vstrm->st_u.in.last_frag) {
+                        if (! vrec_set_input_fragment(vstrm))
+                            return (FALSE);
+                    } else {
+                        (void) vrec_skip_input_bytes(vstrm,
+                                                     vstrm->st_u.in.fbtbc);
+                        goto restart;
+                    }
+                } /* ! haveheader */
+            } /* ! next_frag */
             /* bound queue size and support future mapped reads */
             vrec_truncate_input_q(vstrm, 8);
-            vstrm->st_u.in.fbtbc = 0;
-            if (! vstrm->st_u.in.haveheader) {
-                if (! vrec_set_input_fragment(vstrm))
-                    return (FALSE);
-            }
-            /* reset logical stream position */
             init_lpos(vrec_lpos(vstrm), vrec_fpos(vstrm));
             break;
         case XDR_ENCODE:
@@ -906,18 +924,24 @@ xdr_vrec_eof(XDR *xdrs)
     case XDR_VREC_IN:
         switch (xdrs->x_op) {
         case XDR_DECODE:
-            /* XXX ah, I think the secret is to read -one extra header
-             * iov in vrec_skip_input bytes...! */
         restart:
             if (vstrm->st_u.in.last_frag) {
                 if (vstrm->st_u.in.fbtbc)
-                    if (vrec_skip_input_bytes(vstrm, vstrm->st_u.in.fbtbc);
+                    if (vrec_skip_input_bytes(vstrm, vstrm->st_u.in.fbtbc)) {
+                        /* CASE 1: not eof, and warn skiprecord that
+                         * we have the next header */
+                        vstrm->st_u.in.next_frag = TRUE;
+                        return (FALSE);
+                    }
+                /* CASE 2: eof */
                 return (TRUE);
             }
-            /* next fragment */
-            if (! vrec_set_input_fragment(vstrm))
-                return (TRUE);
-            goto restart;
+            /* CASE 3: more fragments */
+            if (vrec_skip_input_bytes(vstrm, vstrm->st_u.in.fbtbc))
+                goto restart;
+            else
+                return (FALSE); /* XXX error condition, prefer a timeout to
+                                 * a stalled queue */
             break;
         case XDR_ENCODE:
         default:
@@ -1032,7 +1056,36 @@ vrec_flush_out(V_RECSTREAM *vstrm, bool eor)
     return (TRUE);
 }
 
-static bool  /* next two bytes of the input stream are treated as a header */
+static inline bool
+decode_fragment_header(V_RECSTREAM *vstrm, u_int32_t header)
+{
+    /*
+     * Sanity check. Try not to accept wildly incorrect
+     * record sizes. Unfortunately, the only record size
+     * we can positively identify as being 'wildly incorrect'
+     * is zero. Ridiculously large record sizes may look wrong,
+     * but we don't have any way to be certain that they aren't
+     * what the client actually intended to send us.
+     */
+    if (header) {
+        header = ntohl(header);
+        if (header == 0) {
+            vstrm->st_u.in.haveheader = FALSE;
+            return(FALSE);
+        }
+
+        /* decode and clear LAST_FRAG bit */
+        vstrm->st_u.in.last_frag = ((header & LAST_FRAG) == 0) ? FALSE : TRUE;
+        vstrm->st_u.in.fbtbc = header & (~LAST_FRAG);
+        vstrm->st_u.in.haveheader = TRUE;
+
+        return (TRUE);
+    }
+    return (FALSE);
+}
+
+/* Read an initial fragment.  Tries readahead to improve buffering. */
+static bool
 vrec_set_input_fragment(V_RECSTREAM *vstrm)
 {
     struct v_rec_pos_t *pos;
@@ -1050,49 +1103,49 @@ vrec_set_input_fragment(V_RECSTREAM *vstrm)
     iov[1].iov_base = pos->vrec->base + pos->vrec->off;
     iov[1].iov_len = (vstrm->st_u.in.readahead_bytes - sizeof(u_int32_t));
 
-    /*
-     * Sanity check. Try not to accept wildly incorrect
-     * record sizes. Unfortunately, the only record size
-     * we can positively identify as being 'wildly incorrect'
-     * is zero. Ridiculously large record sizes may look wrong,
-     * but we don't have any way to be certain that they aren't
-     * what the client actually intended to send us.
-     */
     nbytes = vstrm->ops.readv(vstrm->vp_handle, iov, 2, VREC_FLAG_NONE);
     pos->vrec->len += (nbytes - sizeof(u_int32_t));
-    header = ntohl(header);
-    if (header == 0)
-        return(FALSE);
 
-    /* decode and clear LAST_FRAG bit */
-    vstrm->st_u.in.last_frag = ((header & LAST_FRAG) == 0) ? FALSE : TRUE;
-    vstrm->st_u.in.fbtbc = header & (~LAST_FRAG);
-    vstrm->st_u.in.haveheader = TRUE;
+    return ( decode_fragment_header(vstrm, header) );
 
     return (TRUE);
 }
 
-/* Consume and discard cnt bytes from the input stream. */
-static void
+/* Consume and discard cnt bytes from the input stream.  Try to read
+ * the next fragment header if available.  Returns TRUE if a new fragment
+ * header has been read, else false. */
+static bool
 vrec_skip_input_bytes(V_RECSTREAM *vstrm, long cnt)
 {
     int ix;
-    u_int32_t nbytes, resid;
+    u_int32_t nbytes, resid, header = 0;
     struct iovec *iov;
 
     while (cnt > 0) {
-        for (ix = 0, resid = cnt; ((resid > 0) && (ix < VREC_NSINK)); ++ix) {
+        for (ix = 0, nbytes = 0, resid = cnt;
+             ((resid > 0) && (ix < VREC_NSINK)); ++ix) {
             iov = &(vstrm->iovsink[ix]);
             iov->iov_len = MIN(resid, VREC_DISCARD_BUFSZ);
             resid -= iov->iov_len;
+            nbytes += iov->iov_len;
+        }
+        /* on fragment boundary, try to read the next header */
+        if (nbytes == cnt) {
+            iov = &(vstrm->iovsink[VREC_STATIC_FRAG]);
+            iov->iov_base = &header;
+            /* iov->iov_len = sizeof(u_int32_t); */
+            ++ix;
         }
         nbytes = vstrm->ops.readv(vstrm->vp_handle,
                                   (struct iovec *) &(vstrm->iovsink),
                                   ix+1 /* iovcnt */,
                                   VREC_FLAG_NONE);
         cnt -= nbytes;
-    }
-    return (TRUE);
+    } /* while */
+
+    return ( decode_fragment_header(vstrm, header) );
+
+    return (FALSE);
 }
 
 /* Read input bytes from the stream, segment-wise. */

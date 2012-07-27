@@ -72,7 +72,9 @@ enum xdr_vrec_direction {
     XDR_VREC_OUT,
 };
 
-#define VREC_NSINK 1
+#define VREC_NSINK 2
+#define VREC_NSTATIC (VREC_NSINK + 1)
+#define VREC_STATIC_FRAG (VREC_NSTATIC-1)
 #define VREC_DISCARD_BUFSZ 8192
 
 struct v_rec_strm
@@ -104,6 +106,7 @@ struct v_rec_strm
             u_long fbtbc; /* fragment bytes to be consumed */
             long readahead_bytes; /* bytes to read ahead across fragments */
             bool last_frag;
+            bool next_frag;
             bool haveheader;
         } in;
         struct {
@@ -117,7 +120,7 @@ struct v_rec_strm
     struct vrec_prealloc prealloc;
 
     /* discard buffers */
-    struct iovec iovsink[VREC_NSINK];
+    struct iovec iovsink[VREC_NSTATIC];
 };
 
 typedef struct v_rec_strm V_RECSTREAM;
