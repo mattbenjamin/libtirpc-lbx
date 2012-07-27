@@ -81,7 +81,7 @@ static const struct  xdr_ops xdr_vrec_ops = {
 
 static bool vrec_flush_out(V_RECSTREAM *, bool);
 static bool vrec_set_input_fragment(V_RECSTREAM *);
-static bool vrec_skip_input_bytes(V_RECSTREAM *, long);
+static void vrec_skip_input_bytes(V_RECSTREAM *, long);
 static bool vrec_get_input_segments(V_RECSTREAM *, int);
 
 #define reset_pos(pos) \
@@ -767,7 +767,7 @@ static int32_t *
 xdr_vrec_inline(XDR *xdrs, u_int len)
 {
     V_RECSTREAM *vstrm = (V_RECSTREAM *)xdrs->x_private;
-    struct v_rec_pos_t *pos = vrec_lpos(vstrm);;
+    struct v_rec_pos_t *pos = vrec_lpos(vstrm);
     int32_t *buf = NULL;
 
     /* we keep xdrrec's inline concept mostly intact.  the function
@@ -861,8 +861,8 @@ xdr_vrec_skiprecord(XDR *xdrs)
             /* stream reset */
             while (vstrm->st_u.in.fbtbc > 0 ||
                    (! vstrm->st_u.in.last_frag)) {
-                if (! vrec_skip_input_bytes(vstrm, vstrm->st_u.in.fbtbc))
-                    return (FALSE);
+                (void) vrec_skip_input_bytes(vstrm, vstrm->st_u.in.fbtbc,
+                                             VREC_FLAG_NONE);
                 if ((! vstrm->st_u.in.last_frag) &&
                     (! vrec_set_input_fragment(vstrm)))
                     return (FALSE);
@@ -906,15 +906,18 @@ xdr_vrec_eof(XDR *xdrs)
     case XDR_VREC_IN:
         switch (xdrs->x_op) {
         case XDR_DECODE:
-            /* stream reset */
-            while (vstrm->st_u.in.fbtbc > 0 ||
-                   (! vstrm->st_u.in.last_frag)) {
-                if (! vrec_skip_input_bytes(vstrm, vstrm->st_u.in.fbtbc))
-                    return (TRUE);
-                if ((! vstrm->st_u.in.last_frag) &&
-                    (! vrec_set_input_fragment(vstrm)))
-                    return (TRUE);
+            /* XXX ah, I think the secret is to read -one extra header
+             * iov in vrec_skip_input bytes...! */
+        restart:
+            if (vstrm->st_u.in.last_frag) {
+                if (vstrm->st_u.in.fbtbc)
+                    if (vrec_skip_input_bytes(vstrm, vstrm->st_u.in.fbtbc);
+                return (TRUE);
             }
+            /* next fragment */
+            if (! vrec_set_input_fragment(vstrm))
+                return (TRUE);
+            goto restart;
             break;
         case XDR_ENCODE:
         default:
@@ -1070,7 +1073,7 @@ vrec_set_input_fragment(V_RECSTREAM *vstrm)
 }
 
 /* Consume and discard cnt bytes from the input stream. */
-static bool
+static void
 vrec_skip_input_bytes(V_RECSTREAM *vstrm, long cnt)
 {
     int ix;
