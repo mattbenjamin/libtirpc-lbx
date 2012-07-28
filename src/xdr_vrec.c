@@ -484,8 +484,6 @@ xdr_vrec_getlong(XDR *xdrs,  long *lp)
                     *lp = (long)ntohl(*buf);
                     pos->boff += sizeof(int32_t);
                     pos->loff += sizeof(int32_t);
-                    vstrm->st_u.in.fbtbc -= sizeof(int32_t);
-                    vstrm->st_u.in.buflen += sizeof(int32_t);
                 } else {
                     /* CASE 2.2: need getbytes */
                     if (! xdr_vrec_getbytes(
@@ -865,10 +863,9 @@ xdr_vrec_inline(XDR *xdrs, u_int len)
             break;
         case XDR_DECODE:
             pos = vrec_lpos(vstrm);
-            if (vstrm->st_u.in.fbtbc >= len) {
+            if ((vstrm->st_u.in.buflen - pos->loff) >= len) {
                 if ((pos->boff + len) <= pos->vrec->size) {
                     buf = (int32_t *)(void *)(pos->vrec->base + pos->boff);
-                    vstrm->st_u.in.fbtbc -= len;
                     pos->boff += len;
                     pos->loff += len;
                 }
@@ -1175,7 +1172,7 @@ vrec_set_input_fragment(V_RECSTREAM *vstrm)
     struct v_rec_pos_t *pos;
     struct iovec iov[2];
     u_int32_t header;
-    uint32_t nbytes;
+    uint32_t nbytes, delta;
 
     pos = vrec_fpos(vstrm); /* XXX multiple fragments? */
 
@@ -1188,11 +1185,16 @@ vrec_set_input_fragment(V_RECSTREAM *vstrm)
     iov[1].iov_len = (vstrm->st_u.in.readahead_bytes - sizeof(u_int32_t));
 
     nbytes = vstrm->ops.readv(vstrm->vp_handle, iov, 2, VREC_FLAG_NONE);
-    pos->vrec->len += (nbytes - sizeof(u_int32_t));
+    delta = (nbytes - sizeof(u_int32_t));
+    pos->vrec->len += delta;
+    vstrm->st_u.in.buflen += delta;
 
-    return ( decode_fragment_header(vstrm, header) );
+    if (decode_fragment_header(vstrm, header)) {
+        vstrm->st_u.in.fbtbc -= delta; /* bytes read count against fbtbc */
+        return (TRUE);
+    }
 
-    return (TRUE);
+    return (FALSE);
 }
 
 /* Consume and discard cnt bytes from the input stream.  Try to read
@@ -1224,10 +1226,14 @@ vrec_skip_input_bytes(V_RECSTREAM *vstrm, long cnt)
                                   (struct iovec *) &(vstrm->iovsink),
                                   ix+1 /* iovcnt */,
                                   VREC_FLAG_NONE);
+        /* bytes read into current fragment count against fbtbc */
+        vstrm->st_u.in.fbtbc -= nbytes;
         cnt -= nbytes;
     } /* while */
 
-    return ( decode_fragment_header(vstrm, header) );
+    if (decode_fragment_header(vstrm, header)) {
+        return (TRUE);
+    }
 
     return (FALSE);
 }
@@ -1238,25 +1244,31 @@ static bool vrec_get_input_segments(V_RECSTREAM *vstrm, int cnt)
     struct v_rec_pos_t *pos = vrec_fpos(vstrm);
     struct v_rec *vrecs[VREC_NFILL];
     struct iovec iov[VREC_NFILL];
-    u_int32_t resid;
+    u_int32_t delta, resid;
     int ix;
 
     resid = cnt;
     for (ix = 0; ((ix < VREC_NFILL) && (resid > 0)); ++ix) {
         /* XXX */
-        if (! vrec_next(vstrm, VREC_FPOS, VREC_FLAG_XTENDQ|VREC_FLAG_BALLOC))
-            return (FALSE);
+        delta = MIN(resid, (pos->vrec->size - pos->vrec->len));
+        if (! delta) {
+            if (! vrec_next(vstrm, VREC_FPOS,
+                            VREC_FLAG_XTENDQ|VREC_FLAG_BALLOC))
+                return (FALSE);
+            delta = MIN(resid, pos->vrec->size);
+        }
         /* XXX pos->vrec MAY have been allocated, but in advanced setups
          * it may be pre-posted buffer */
         vrecs[ix] = pos->vrec;
         iov[ix].iov_base = vrecs[ix]->base;
-        iov[ix].iov_len = MIN(vrecs[ix]->size, resid);
-        resid -= iov[ix].iov_len;
+        iov[ix].iov_len = delta;
+        resid -= delta;
     }
     /* XXX callers will re-try if we get a short read */
     resid = vstrm->ops.readv(vstrm->vp_handle, iov, ix, VREC_FLAG_NONE);
     for (ix = 0; ((ix < VREC_NFILL) && (resid > 0)); ++ix) {
         vstrm->st_u.in.buflen += iov[ix].iov_len;
+        /* bytes read count against fbtbc */
         vstrm->st_u.in.fbtbc -= iov[ix].iov_len;
         vrecs[ix]->len = iov[ix].iov_len;
         resid -= iov[ix].iov_len;
