@@ -578,7 +578,8 @@ xdr_vrec_getbytes(XDR *xdrs, char *addr, u_int len)
             pos = vrec_lpos(vstrm);
         restart:
             /* CASE 1: consuming bytes in a stream (after SETPOS/rewind) */
-            while (pos->loff < vstrm->st_u.in.buflen) {
+            while ((len > 0) &&
+                   (pos->loff < vstrm->st_u.in.buflen)) {
                 while (len > 0) {
                     u_int delta = MIN(len, (pos->vrec->len - pos->boff));
                     if (unlikely(! delta)) {
@@ -1185,15 +1186,17 @@ vrec_set_input_fragment(V_RECSTREAM *vstrm)
     iov[1].iov_len = (vstrm->st_u.in.readahead_bytes - sizeof(u_int32_t));
 
     nbytes = vstrm->ops.readv(vstrm->vp_handle, iov, 2, VREC_FLAG_NONE);
-    delta = (nbytes - sizeof(u_int32_t));
-    pos->vrec->len += delta;
-    vstrm->st_u.in.buflen += delta;
 
-    if (decode_fragment_header(vstrm, header)) {
-        vstrm->st_u.in.fbtbc -= delta; /* bytes read count against fbtbc */
-        return (TRUE);
+    /* XXX */
+    if (nbytes) {
+        delta = (nbytes - sizeof(u_int32_t));
+        pos->vrec->len += delta;
+        vstrm->st_u.in.buflen += delta;
+        if (decode_fragment_header(vstrm, header)) {
+            vstrm->st_u.in.fbtbc -= delta; /* bytes read count against fbtbc */
+            return (TRUE);
+        }
     }
-
     return (FALSE);
 }
 
