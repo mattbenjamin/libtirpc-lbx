@@ -655,12 +655,13 @@ xdr_vrec_putbytes(XDR *xdrs, const char *addr, u_int len)
     case XDR_VREC_OUT:
         while (len > 0) {
             pos = vrec_fpos(vstrm);
-            delta = pos->vrec->size - pos->vrec->len;
+            delta = MIN(len,  pos->vrec->size - pos->vrec->len);
             if (unlikely(! delta)) {
                 /* advance fill pointer */
                 if (! vrec_next(vstrm, VREC_FPOS,
                                 VREC_FLAG_XTENDQ|VREC_FLAG_BALLOC))
                     return (FALSE);
+                continue;
             }
             /* ibid */
             memcpy((pos->vrec->base + pos->vrec->off), addr, delta);
