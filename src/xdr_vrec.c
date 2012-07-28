@@ -218,7 +218,6 @@ vrec_init_ioq(V_RECSTREAM *vstrm)
     vrec->len = 0;
     vrec->flags = VREC_FLAG_RECLAIM;
     vrec_append_rec(&vstrm->ioq, vrec);
-    (vstrm->ioq.size)++;
 }
 
 static inline void
