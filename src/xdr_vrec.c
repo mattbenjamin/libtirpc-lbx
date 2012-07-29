@@ -115,7 +115,7 @@ init_prealloc_queues(V_RECSTREAM *vstrm)
     vstrm->prealloc.v_req_buf.size = 0;
 
     for (ix = 0; ix < VQSIZE; ++ix) {
-        vrec = mem_alloc(sizeof(struct v_rec));
+        vrec = mem_zalloc(sizeof(struct v_rec));
         TAILQ_INSERT_TAIL(&vstrm->prealloc.v_req.q, vrec, ioq);
         (vstrm->prealloc.v_req.size)++;
     }
@@ -172,7 +172,6 @@ init_discard_buffers(V_RECSTREAM *vstrm)
     /* this is a placeholder for a "null" mapping--ie, we'd expect
      * readv to drain its socket buffer and never store or cache any
      * value read into the segment */
-
     for (ix = 0; ix < VREC_NSINK; ix++) {
         iov = &(vstrm->iovsink[ix]);
         iov->iov_base = vrec_alloc_buffer(VREC_DISCARD_BUFSZ);
@@ -180,9 +179,9 @@ init_discard_buffers(V_RECSTREAM *vstrm)
     }
 
     /* the last iovec is used to peek into the next fragment */
-    iov[VREC_STATIC_FRAG].iov_base = NULL; /* varies */
-    iov[VREC_STATIC_FRAG].iov_len = sizeof(u_int32_t);
-
+    iov = &(vstrm->iovsink[VREC_STATIC_FRAG]);
+    iov->iov_base = NULL; /* varies */
+    iov->iov_len = sizeof(u_int32_t);
 }
 
 static inline void
@@ -363,7 +362,7 @@ vrec_next(V_RECSTREAM *vstrm, enum vrec_cursor wh_pos, u_int flags)
         (pos->bpos)++;
         pos->boff = 0;
         /* pos->loff is unchanged */
-        *(vrec_lpos(vstrm)) = *pos;
+        *(vrec_lpos(vstrm)) = *pos; /* XXXX for OUT queue? */
         break;
     case VREC_LPOS:
         pos = vrec_lpos(vstrm);
@@ -373,6 +372,7 @@ vrec_next(V_RECSTREAM *vstrm, enum vrec_cursor wh_pos, u_int flags)
         pos->vrec = vrec;
         (pos->bpos)++;
         pos->boff = 0;
+        /* pos->loff is unchanged */
         break;
     default:
         abort();
@@ -423,6 +423,7 @@ xdr_vrec_create(XDR *xdrs,
         vstrm->st_u.in.buflen = 0;
         vstrm->st_u.in.haveheader = FALSE;
         vstrm->st_u.in.last_frag = FALSE; /* do NOT use if !haveheader */
+        vstrm->st_u.in.next_frag = FALSE;
         vrec_truncate_input_q(vstrm, 8);
         break;
     case XDR_VREC_OUT:
@@ -566,8 +567,6 @@ xdr_vrec_getbytes(XDR *xdrs, char *addr, u_int len)
     struct v_rec_pos_t *pos;
     u_long cbtbc;
 
-    /* XXX ARG! I dont think vrec_lpos(vstrm) fully works here */
-
     switch (vstrm->direction) {
     case XDR_VREC_IN:
         switch (xdrs->x_op) {
@@ -580,22 +579,20 @@ xdr_vrec_getbytes(XDR *xdrs, char *addr, u_int len)
             /* CASE 1: consuming bytes in a stream (after SETPOS/rewind) */
             while ((len > 0) &&
                    (pos->loff < vstrm->st_u.in.buflen)) {
-                while (len > 0) {
-                    u_int delta = MIN(len, (pos->vrec->len - pos->boff));
-                    if (unlikely(! delta)) {
-                        if (! vrec_next(vstrm, VREC_LPOS, VREC_FLAG_NONE))
-                            return (FALSE);
-                        goto restart;
-                    }
-                    /* in glibc 2.14+ x86_64, memcpy no longer tries to handle
-                     * overlapping areas, see Fedora Bug 691336 (NOTABUG);
-                     * we dont permit overlapping segments, so memcpy may be a
-                     * small win over memmove */
-                    memcpy(addr, (pos->vrec->base + pos->boff), delta);
-                    pos->loff += delta;
-                    pos->boff += delta;
-                    len -= delta;
+                u_int delta = MIN(len, (pos->vrec->len - pos->boff));
+                if (unlikely(! delta)) {
+                    if (! vrec_next(vstrm, VREC_LPOS, VREC_FLAG_NONE))
+                        return (FALSE);
+                    goto restart;
                 }
+                /* in glibc 2.14+ x86_64, memcpy no longer tries to handle
+                 * overlapping areas, see Fedora Bug 691336 (NOTABUG);
+                 * we dont permit overlapping segments, so memcpy may be a
+                 * small win over memmove */
+                memcpy(addr, (pos->vrec->base + pos->boff), delta);
+                pos->loff += delta;
+                pos->boff += delta;
+                len -= delta;
             }
             /* CASE 2: reading into the stream */
             while (len > 0) {
@@ -666,10 +663,10 @@ xdr_vrec_putbytes(XDR *xdrs, const char *addr, u_int len)
             pos->vrec->off += delta;
             pos->vrec->len += delta;
             pos->boff += delta;
+            pos->loff += delta;
             vstrm->st_u.out.frag_len += delta;
             len -= delta;
         }
-        init_lpos(vrec_lpos(vstrm), pos);
         break;
     default:
         abort();
@@ -684,17 +681,20 @@ static bool
 xdr_vrec_getbufs(XDR *xdrs, xdr_uio *uio, u_int len, u_int flags)
 {
     V_RECSTREAM *vstrm = (V_RECSTREAM *)xdrs->x_private;
-    struct v_rec_pos_t *pos;
+    struct v_rec_pos_t *pos = vrec_lpos(vstrm);;
     u_long cbtbc;
     int ix;
 
-    /* XXX caller can't guess how many buffers */
-    uio->xbs_cnt = MIN(VREC_MAXBUFS, (len / vstrm->def_bsize));
+    /* allocate sufficient slots to empty the queue, else MAX */
+    uio->xbs_cnt = MIN(VREC_MAXBUFS, (vrec_qlen(&vstrm->ioq) - pos->bpos));
+
+    /* fail if no segments available */
+    if (unlikely(! uio->xbs_cnt))
+        return (FALSE);
+
     uio->xbs_buf = mem_alloc(uio->xbs_cnt);
     uio->xbs_resid = 0;
     ix = 0;
-
-    /* XXX ARG! I dont think vrec_lpos(vstrm) fully works here */
 
     switch (vstrm->direction) {
     case XDR_VREC_IN:
@@ -703,24 +703,22 @@ xdr_vrec_getbufs(XDR *xdrs, xdr_uio *uio, u_int len, u_int flags)
             abort();
             break;
         case XDR_DECODE:
-            pos = vrec_lpos(vstrm); /* XXX flag?? */
         restart:
             /* CASE 1:  re-consuming bytes in a stream (after SETPOS/rewind) */
-            while (pos->loff < vstrm->st_u.in.buflen) {
-                while (len > 0) {
-                    u_int delta = MIN(len, (pos->vrec->len - pos->boff));
-                    if (unlikely(! delta)) {
-                        if (! vrec_next(vstrm, VREC_LPOS, VREC_FLAG_NONE))
-                            return (FALSE);
+            while ((len > 0) &&
+                   (pos->loff < vstrm->st_u.in.buflen)) {
+                u_int delta = MIN(len, (pos->vrec->len - pos->boff));
+                if (unlikely(! delta)) {
+                    if (! vrec_next(vstrm, VREC_LPOS, VREC_FLAG_NONE))
+                        return (FALSE);
                         goto restart;
-                    }
-                    (uio->xbs_buf[ix]).xb_p1 = pos->vrec;
-                    (pos->vrec->refcnt)++;
-                    (uio->xbs_buf[ix]).xb_base = (pos->vrec->base + pos->boff);
-                    pos->loff += delta;
-                    pos->boff += delta;
-                    len -= delta;
                 }
+                (uio->xbs_buf[ix]).xb_p1 = pos->vrec;
+                (pos->vrec->refcnt)++;
+                (uio->xbs_buf[ix]).xb_base = (pos->vrec->base + pos->boff);
+                pos->loff += delta;
+                pos->boff += delta;
+                len -= delta;
             }
             /* CASE 2: reading into the stream */
             while (len > 0) {
@@ -787,9 +785,6 @@ xdr_vrec_putbufs(XDR *xdrs, xdr_uio *uio, u_int flags)
     default:
         /* XXX potentially we should give the upper layer control over
          * whether buffers are spliced or recycled */
-
-        /* XXX add logic for releasing buffers referenced in previous
-         * calls to xdr_vrec_getbufs? */
         for (ix = 0; ix < uio->xbs_cnt; ++ix) {
             /* advance fill pointer, do not allocate buffers */
             if (! vrec_next(vstrm, VREC_FPOS, VREC_FLAG_XTENDQ))
@@ -804,7 +799,6 @@ xdr_vrec_putbufs(XDR *xdrs, xdr_uio *uio, u_int flags)
             fpos->vrec->len = xbuf->xb_len;
             fpos->vrec->off = 0;
         }
-        init_lpos(vrec_lpos(vstrm), fpos);
         break;
     }
     return (TRUE);
@@ -944,7 +938,6 @@ xdr_vrec_skiprecord(XDR *xdrs)
         switch (xdrs->x_op) {
         case XDR_DECODE:
         restart:
-            /* ARG! we need to know whether we have a new record... */
             /* CASE 1: xdr_vrec_eof read the next header */
             if (vstrm->st_u.in.next_frag) {
                 vstrm->st_u.in.next_frag = FALSE; /* clear flag */
@@ -1186,13 +1179,16 @@ vrec_set_input_fragment(V_RECSTREAM *vstrm)
     iov[1].iov_len = (vstrm->st_u.in.readahead_bytes - sizeof(u_int32_t));
 
     nbytes = vstrm->ops.readv(vstrm->vp_handle, iov, 2, VREC_FLAG_NONE);
-
     /* XXX */
     if (nbytes) {
         delta = (nbytes - sizeof(u_int32_t));
+        if (delta >  vstrm->st_u.in.fbtbc) {
+            int stop_here = 1;
+        }
         pos->vrec->len += delta;
         vstrm->st_u.in.buflen += delta;
         if (decode_fragment_header(vstrm, header)) {
+            printf("1 fbtbc %d delta %d\n", vstrm->st_u.in.fbtbc, delta);
             vstrm->st_u.in.fbtbc -= delta; /* bytes read count against fbtbc */
             return (TRUE);
         }
@@ -1230,6 +1226,7 @@ vrec_skip_input_bytes(V_RECSTREAM *vstrm, long cnt)
                                   ix+1 /* iovcnt */,
                                   VREC_FLAG_NONE);
         /* bytes read into current fragment count against fbtbc */
+        printf("2 fbtbc %d nbytes %d\n", vstrm->st_u.in.fbtbc, nbytes);
         vstrm->st_u.in.fbtbc -= nbytes;
         cnt -= nbytes;
     } /* while */
@@ -1272,6 +1269,8 @@ static bool vrec_get_input_segments(V_RECSTREAM *vstrm, int cnt)
     for (ix = 0; ((ix < VREC_NFILL) && (resid > 0)); ++ix) {
         vstrm->st_u.in.buflen += iov[ix].iov_len;
         /* bytes read count against fbtbc */
+        printf("3 fbtbc %d iov_len %d\n", vstrm->st_u.in.fbtbc,
+               iov[ix].iov_len);
         vstrm->st_u.in.fbtbc -= iov[ix].iov_len;
         vrecs[ix]->len = iov[ix].iov_len;
         resid -= iov[ix].iov_len;
