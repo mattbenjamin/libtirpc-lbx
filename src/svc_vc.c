@@ -191,18 +191,14 @@ svc_vc_create2(int fd, u_int sendsize, u_int recvsize, u_int flags)
     r->sendsize = __rpc_get_t_size(si.si_af, si.si_proto, (int)sendsize);
     r->recvsize = __rpc_get_t_size(si.si_af, si.si_proto, (int)recvsize);
     r->maxrec = __svc_maxrec;
-    xprt = mem_alloc(sizeof(SVCXPRT));
+    xprt = mem_zalloc(sizeof(SVCXPRT));
     if (xprt == NULL) {
         __warnx(TIRPC_DEBUG_FLAG_SVC_VC,
                 "svc_vc_create: out of memory");
         goto cleanup_svc_vc_create;
     }
     xprt->xp_flags = SVC_XPRT_FLAG_NONE;
-    xprt->xp_tp = NULL;
     xprt->xp_p1 = r;
-    xprt->xp_p2 = NULL;
-    xprt->xp_p3 = NULL;
-    xprt->xp_auth = NULL;
     xprt->xp_verf = _null_auth;
     svc_vc_rendezvous_ops(xprt);
     xprt->xp_fd = fd;
@@ -430,7 +426,7 @@ makefd_xprt(int fd, u_int sendsz, u_int recvsz)
         goto done;
     }
 
-    xprt = mem_alloc(sizeof(SVCXPRT));
+    xprt = mem_zalloc(sizeof(SVCXPRT));
     if (xprt == NULL) {
         __warnx(TIRPC_DEBUG_FLAG_SVC_VC,
                 "svc_vc: makefd_xprt: out of memory");
@@ -448,6 +444,11 @@ makefd_xprt(int fd, u_int sendsz, u_int recvsz)
     }
     cd->strm_stat = XPRT_IDLE;
 
+    /* the SVCXPRT created in svc_vc_create accepts new connections
+     * in its xp_recv op, the rendezvous_request method, but xprt is
+     * a call channel */
+    svc_vc_ops(xprt);
+
     /* parallel send/recv */
     xdr_vrec_create(&(cd->xdrs_in),
                     XDR_VREC_IN, xprt, readv_vc, NULL, recvsz,
@@ -458,15 +459,7 @@ makefd_xprt(int fd, u_int sendsz, u_int recvsz)
                     VREC_FLAG_NONE);
 
     xprt->xp_p1 = cd;
-    xprt->xp_auth = NULL;
     xprt->xp_verf.oa_base = cd->verf_body;
-
-    /* the SVCXPRT created in svc_vc_create accepts new connections
-     * in its xp_recv op, the rendezvous_request method, but xprt is
-     * a call channel */
-    svc_vc_ops(xprt);
-
-    xprt->xp_port = 0;  /* this is a connection, not a rendezvouser */
     xprt->xp_fd = fd;
     if (__rpc_fd2sockinfo(fd, &si) && __rpc_sockinfo2netid(&si, &netid))
         xprt->xp_netid = rpc_strdup(netid);
