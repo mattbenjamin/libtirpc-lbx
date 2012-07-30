@@ -32,6 +32,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <errno.h>
 
 #include <rpc/types.h>
 #include <rpc/xdr.h>
@@ -230,22 +231,6 @@ vrec_rele(V_RECSTREAM *vstrm, struct v_rec *vrec)
         /* return to freelist */
         vrec_put_vrec(vstrm, vrec);
     }
-}
-
-static inline size_t
-vrec_readahead_bytes(V_RECSTREAM *vstrm, int len, u_int flags)
-{
-    struct v_rec_pos_t *pos;
-    struct iovec iov[1];
-    uint32_t nbytes;
-
-    pos = vrec_fpos(vstrm);
-    iov->iov_base = pos->vrec->base + pos->vrec->off;
-    iov->iov_len = len;
-    nbytes = vstrm->ops.readv(vstrm->vp_handle, iov, 1, flags);
-    pos->vrec->len += nbytes;
-
-    return (nbytes);
 }
 
 enum vrec_cursor
@@ -919,7 +904,6 @@ xdr_vrec_noop(void)
     return (FALSE);
 }
 
-
 /*
  * Exported routines to manage xdr records
  */
@@ -1043,15 +1027,14 @@ xdr_vrec_endofrecord(XDR *xdrs, bool flush)
 {
     V_RECSTREAM *vstrm = (V_RECSTREAM *)(xdrs->x_private);
 
+    /* XXXX atm, frag_sent can never be true... */
+
     /* flush, resetting stream (sends LAST_FRAG) */
     if (flush || vstrm->st_u.out.frag_sent) {
         vstrm->st_u.out.frag_sent = FALSE;
         return (vrec_flush_out(vstrm, TRUE));
     }
 
-    /* TODO: fix me! */
-
-    /* XXX check */
     vstrm->st_u.out.frag_header =
         htonl((u_int32_t)(vstrm->st_u.out.frag_len | LAST_FRAG));
 
@@ -1092,6 +1075,11 @@ vrec_flush_segments(V_RECSTREAM *vstrm, struct iovec *iov, int iovcnt,
         /* blocking write */
         nbytes = vstrm->ops.writev(
             vstrm->vp_handle, tiov, iovcnt, VREC_FLAG_NONE);
+        if (unlikely(nbytes < 0)) {
+            __warnx(TIRPC_DEBUG_FLAG_XDRREC, "%s ops.writev failed %d\n",
+                    __func__, errno);
+            return; /* XXX is there any way to recover? */
+        }
         resid -= nbytes;
     }
 }
@@ -1175,22 +1163,33 @@ vrec_set_input_fragment(V_RECSTREAM *vstrm)
     iov[0].iov_len = sizeof(u_int32_t);
 
     /* data up to readahead bytes */
+restart:
     iov[1].iov_base = pos->vrec->base + pos->vrec->off;
-    iov[1].iov_len = (vstrm->st_u.in.readahead_bytes - sizeof(u_int32_t));
+    iov[1].iov_len = MIN((pos->vrec->size - pos->vrec->len),
+                         (vstrm->st_u.in.readahead_bytes - sizeof(u_int32_t)));
 
+    /* check for filled pos->vrec */
+    if (unlikely(! iov[1].iov_len)) {
+        if (! vrec_next(vstrm, VREC_FPOS, VREC_FLAG_XTENDQ|VREC_FLAG_BALLOC))
+            return (FALSE);
+        goto restart;
+    }
     nbytes = vstrm->ops.readv(vstrm->vp_handle, iov, 2, VREC_FLAG_NONE);
-    /* XXX */
-    if (nbytes) {
+    if (likely(nbytes > 0)) {
         delta = (nbytes - sizeof(u_int32_t));
-        if (delta >  vstrm->st_u.in.fbtbc) {
-            int stop_here = 1;
-        }
         pos->vrec->len += delta;
         vstrm->st_u.in.buflen += delta;
-        if (decode_fragment_header(vstrm, header)) {
-            printf("1 fbtbc %d delta %d\n", vstrm->st_u.in.fbtbc, delta);
+        if (likely(decode_fragment_header(vstrm, header))) {
+            __warnx(TIRPC_DEBUG_FLAG_XDRREC,
+                    "%s fbtbc %ld de1ta %ld\n",
+                    __func__, vstrm->st_u.in.fbtbc, delta);
             vstrm->st_u.in.fbtbc -= delta; /* bytes read count against fbtbc */
             return (TRUE);
+        }
+    } else {
+        if (nbytes < 0) {
+            __warnx(TIRPC_DEBUG_FLAG_XDRREC, "%s ops.readv failed %d\n",
+                    __func__, errno);
         }
     }
     return (FALSE);
@@ -1225,10 +1224,18 @@ vrec_skip_input_bytes(V_RECSTREAM *vstrm, long cnt)
                                   (struct iovec *) &(vstrm->iovsink),
                                   ix+1 /* iovcnt */,
                                   VREC_FLAG_NONE);
-        /* bytes read into current fragment count against fbtbc */
-        printf("2 fbtbc %d nbytes %d\n", vstrm->st_u.in.fbtbc, nbytes);
-        vstrm->st_u.in.fbtbc -= nbytes;
-        cnt -= nbytes;
+        if (unlikely(nbytes < 0)) {
+            __warnx(TIRPC_DEBUG_FLAG_XDRREC, "%s ops.readv failed %d\n",
+                    __func__, errno);
+            return; /* XXX is there any way to recover? */
+        } else {
+            /* bytes read into current fragment count against fbtbc */
+            __warnx(TIRPC_DEBUG_FLAG_XDRREC,
+                    "%s fbtbc %ld nbytes %ld\n",
+                    __func__, vstrm->st_u.in.fbtbc, nbytes);
+            vstrm->st_u.in.fbtbc -= nbytes;
+            cnt -= nbytes;
+        }
     } /* while */
 
     if (decode_fragment_header(vstrm, header)) {
@@ -1266,11 +1273,14 @@ static bool vrec_get_input_segments(V_RECSTREAM *vstrm, int cnt)
     }
     /* XXX callers will re-try if we get a short read */
     resid = vstrm->ops.readv(vstrm->vp_handle, iov, ix, VREC_FLAG_NONE);
+
+
     for (ix = 0; ((ix < VREC_NFILL) && (resid > 0)); ++ix) {
         vstrm->st_u.in.buflen += iov[ix].iov_len;
         /* bytes read count against fbtbc */
-        printf("3 fbtbc %d iov_len %d\n", vstrm->st_u.in.fbtbc,
-               iov[ix].iov_len);
+        __warnx(TIRPC_DEBUG_FLAG_XDRREC,
+                "%s fbtbc %ld iov_len %ld\n",
+                __func__, vstrm->st_u.in.fbtbc, iov[ix].iov_len);
         vstrm->st_u.in.fbtbc -= iov[ix].iov_len;
         vrecs[ix]->len = iov[ix].iov_len;
         resid -= iov[ix].iov_len;

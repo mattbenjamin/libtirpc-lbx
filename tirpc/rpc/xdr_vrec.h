@@ -38,7 +38,7 @@ struct v_rec
     u_int flags;
 };
 
-#define VQSIZE 64
+#define VQSIZE 2 /* 64 */
 
 struct v_rec_pos_t
 {
