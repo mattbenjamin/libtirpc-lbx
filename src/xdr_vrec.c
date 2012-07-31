@@ -59,6 +59,7 @@ static u_int xdr_vrec_getpos(XDR *);
 static bool xdr_vrec_setpos(XDR *, u_int);
 static int32_t *xdr_vrec_inline(XDR *, u_int);
 static void xdr_vrec_destroy(XDR *);
+static bool xdr_vrec_control(XDR *, /* const */ int, void *);
 static bool xdr_vrec_noop(void);
 
 typedef bool (* dummyfunc3)(XDR *, int, void *);
@@ -73,7 +74,7 @@ static const struct  xdr_ops xdr_vrec_ops = {
     xdr_vrec_setpos,
     xdr_vrec_inline,
     xdr_vrec_destroy,
-    (dummyfunc3) xdr_vrec_noop, /* x_control */
+    xdr_vrec_control,
     xdr_vrec_getbufs,
     xdr_vrec_putbufs
 };
@@ -258,7 +259,7 @@ vrec_stream_reset(V_RECSTREAM *vstrm, enum vrec_cursor wh_pos)
     case VREC_RESET_POS:
         vrec_stream_reset(vstrm, VREC_FPOS);
         vrec_stream_reset(vstrm, VREC_LPOS);
-        /* XXXX */
+        /* XXX */
         pos = vrec_fpos(vstrm);
         pos->vrec->off = 0;
         pos->vrec->len = 0;
@@ -902,6 +903,29 @@ xdr_vrec_destroy(XDR *xdrs)
     free_discard_buffers(vstrm);
     mem_free(vstrm, sizeof(V_RECSTREAM));
 }
+
+static bool
+xdr_vrec_control(XDR *xdrs, /* const */ int rq, void *in)
+{
+    V_RECSTREAM *vstrm = (V_RECSTREAM *)xdrs->x_private;
+
+    switch (rq) {
+    case VREC_GET_READAHEAD:
+        if (vstrm->direction != XDR_VREC_IN)
+            return (FALSE);
+        *(u_int *)in = vstrm->st_u.in.readahead_bytes;
+        break;
+    case VREC_SET_READAHEAD:
+        if (vstrm->direction != XDR_VREC_IN)
+            return (FALSE);
+        vstrm->st_u.in.readahead_bytes = *(u_int *)in;
+        break;
+    default:
+        return (FALSE);
+    }
+    return (TRUE);
+}
+
 
 static bool
 xdr_vrec_noop(void)

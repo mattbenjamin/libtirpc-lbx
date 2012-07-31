@@ -135,6 +135,10 @@ typedef struct v_rec_strm V_RECSTREAM;
 #define VREC_FLAG_XTENDQ        0x0004
 #define VREC_FLAG_BALLOC        0x0008
 
+/* control interface */
+#define VREC_GET_READAHEAD      0x0001
+#define VREC_SET_READAHEAD      0x0002
+
 /* vector equivalents */
 
 extern void xdr_vrec_create(XDR *, enum xdr_vrec_direction, void *,
