@@ -258,6 +258,10 @@ vrec_stream_reset(V_RECSTREAM *vstrm, enum vrec_cursor wh_pos)
     case VREC_RESET_POS:
         vrec_stream_reset(vstrm, VREC_FPOS);
         vrec_stream_reset(vstrm, VREC_LPOS);
+        /* XXXX */
+        pos = vrec_fpos(vstrm);
+        pos->vrec->off = 0;
+        pos->vrec->len = 0;
         return;
         break;
     default:
@@ -405,10 +409,12 @@ xdr_vrec_create(XDR *xdrs,
         vrec_init_ioq(vstrm);
         vstrm->st_u.in.readahead_bytes = 1200; /* XXX PMTU? */
         vstrm->st_u.in.fbtbc = 0;
+        vstrm->st_u.in.rbtbc = 0;
         vstrm->st_u.in.buflen = 0;
         vstrm->st_u.in.haveheader = FALSE;
         vstrm->st_u.in.last_frag = FALSE; /* do NOT use if !haveheader */
         vstrm->st_u.in.next_frag = FALSE;
+        vstrm->st_u.in.shift_pos = FALSE;
         vrec_truncate_input_q(vstrm, 8);
         break;
     case XDR_VREC_OUT:
@@ -417,7 +423,6 @@ xdr_vrec_create(XDR *xdrs,
         vrec_truncate_output_q(vstrm, 8);
         vstrm->st_u.out.frag_len = 0;
         vstrm->st_u.out.frag_sent = FALSE;
-        vrec_truncate_output_q(vstrm, 8);
         break;
     default:
         abort();
@@ -925,7 +930,7 @@ xdr_vrec_skiprecord(XDR *xdrs)
             /* CASE 1: xdr_vrec_eof read the next header */
             if (vstrm->st_u.in.next_frag) {
                 vstrm->st_u.in.next_frag = FALSE; /* clear flag */
-            } else {
+            } else { /* nothing */
                 /* CASE 2: we have nothing */
                 if (! vstrm->st_u.in.haveheader) {
                     if (! vrec_set_input_fragment(vstrm))
@@ -949,6 +954,7 @@ xdr_vrec_skiprecord(XDR *xdrs)
                         goto restart;
                     }
                 } /* ! haveheader */
+                break;
             } /* ! next_frag */
             /* bound queue size and support future mapped reads */
             vrec_truncate_input_q(vstrm, 8);
@@ -965,7 +971,6 @@ xdr_vrec_skiprecord(XDR *xdrs)
         abort();
         break;
     }
-
     return (TRUE);
 }
 
@@ -978,20 +983,27 @@ bool
 xdr_vrec_eof(XDR *xdrs)
 {
     V_RECSTREAM *vstrm = (V_RECSTREAM *)(xdrs->x_private);
+    struct v_rec_pos_t *pos;
+
+    /* XXX a potential open issue here is if readahead could have
+     * consumed a fragment ahead in the stream.  How do we recognize and
+     * deal with this? */
 
     switch (vstrm->direction) {
     case XDR_VREC_IN:
         switch (xdrs->x_op) {
         case XDR_DECODE:
+            pos = vrec_lpos(vstrm); /* XXX not sure req. yet... */
         restart:
             if (vstrm->st_u.in.last_frag) {
-                if (vstrm->st_u.in.fbtbc)
+                if (vstrm->st_u.in.fbtbc) {
                     if (vrec_skip_input_bytes(vstrm, vstrm->st_u.in.fbtbc)) {
                         /* CASE 1: not eof, and warn skiprecord that
                          * we have the next header */
                         vstrm->st_u.in.next_frag = TRUE;
                         return (FALSE);
                     }
+                }
                 /* CASE 2: eof */
                 return (TRUE);
             }
@@ -1034,13 +1046,6 @@ xdr_vrec_endofrecord(XDR *xdrs, bool flush)
         vstrm->st_u.out.frag_sent = FALSE;
         return (vrec_flush_out(vstrm, TRUE));
     }
-
-    vstrm->st_u.out.frag_header =
-        htonl((u_int32_t)(vstrm->st_u.out.frag_len | LAST_FRAG));
-
-    /* advance fill pointer */
-    if (! vrec_next(vstrm, VREC_FPOS, VREC_FLAG_XTENDQ))
-        return (FALSE);
 
     return (TRUE);
 }
@@ -1115,7 +1120,9 @@ vrec_flush_out(V_RECSTREAM *vstrm, bool eor)
         }
         ++ix;
     }
-    vrec_truncate_output_q(vstrm, 8);
+
+    vrec_truncate_output_q(vstrm, 8); /* calls vrec_stream_reset */
+
     return (TRUE);
 }
 
@@ -1158,6 +1165,21 @@ vrec_set_input_fragment(V_RECSTREAM *vstrm)
 
     pos = vrec_fpos(vstrm); /* XXX multiple fragments? */
 
+#if 0
+    /* XXX check rbtbc size */
+    if (rbtbc >= sizeof(u_int32_t)) {
+        header = *((u_int32_t *) pos->vrec->base + pos->boff);
+        if (likely(decode_fragment_header(vstrm, header))) {
+            pos->boff += sizeof(u_int32_t);
+        }
+    }
+#endif
+
+    /* bound queue size and support future mapped reads */
+    vstrm->st_u.in.buflen = 0; /* XXX above would update, not zero buflen */
+    vrec_truncate_input_q(vstrm, 8);
+    init_lpos(vrec_lpos(vstrm), vrec_fpos(vstrm));
+
     /* fragment header */
     iov[0].iov_base = &header;
     iov[0].iov_len = sizeof(u_int32_t);
@@ -1177,16 +1199,29 @@ restart:
     nbytes = vstrm->ops.readv(vstrm->vp_handle, iov, 2, VREC_FLAG_NONE);
     if (likely(nbytes > 0)) {
         delta = (nbytes - sizeof(u_int32_t));
-        pos->vrec->len += delta;
-        vstrm->st_u.in.buflen += delta;
         if (likely(decode_fragment_header(vstrm, header))) {
             __warnx(TIRPC_DEBUG_FLAG_XDRREC,
                     "%s fbtbc %ld de1ta %ld\n",
                     __func__, vstrm->st_u.in.fbtbc, delta);
+            if (delta > vstrm->st_u.in.fbtbc) {
+                /* XXX if this case happens, we need to process a header
+                 * in the interior of a buffer (shift_pos is intended to
+                 * indicate to skiprecord that we did that, by moving the
+                 * current vrec to the head of the queue, and starting its
+                 * offset at the read point, after the header).  I'm not
+                 * clear it does happen */
+                abort(); /* TODO: shift_pos */
+            }
+            pos->vrec->len += delta;
+            vstrm->st_u.in.buflen += delta;
             vstrm->st_u.in.fbtbc -= delta; /* bytes read count against fbtbc */
             return (TRUE);
         }
     } else {
+        /* XXX */
+        vstrm->st_u.in.fbtbc = 0;
+        vstrm->st_u.in.haveheader = FALSE;
+        vstrm->st_u.in.last_frag = FALSE;
         if (nbytes < 0) {
             __warnx(TIRPC_DEBUG_FLAG_XDRREC, "%s ops.readv failed %d\n",
                     __func__, errno);
