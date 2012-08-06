@@ -416,15 +416,15 @@ makefd_xprt(int fd, u_int sendsz, u_int recvsz)
 
     assert(fd != -1);
 
-    if (! __svc_params->max_connections)
-        __svc_params->max_connections = FD_SETSIZE;
-
-    if (fd >= __svc_params->max_connections) {
-        __warnx(TIRPC_DEBUG_FLAG_SVC_VC,
-                "svc_vc: makefd_xprt: fd too high\n");
-        xprt = NULL;
-        goto done;
-    }
+#if 0 /* TODO:  keep atomic counter of open connections */
+        if ( __svc_params->connections >= __svc_params->max_connections) {
+            __warnx(TIRPC_DEBUG_FLAG_SVC_VC,
+                    "%s: makefd_xprt: max_connections exceeded\n",
+                    __func__);
+                xprt = NULL;
+                goto done;
+        }
+#endif
 
     xprt = mem_zalloc(sizeof(SVCXPRT));
     if (xprt == NULL) {
