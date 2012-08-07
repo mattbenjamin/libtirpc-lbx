@@ -33,6 +33,7 @@ struct v_rec
     uint32_t refcnt;
     void *base;
     u_int off;
+    u_int xoff;
     u_int len;
     u_int size;
     u_int flags;

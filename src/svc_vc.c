@@ -73,6 +73,8 @@
 
 #include <getpeereid.h>
 
+#define XDR_VREC 1
+
 extern struct svc_params __svc_params[1];
 
 static bool rendezvous_request(SVCXPRT *, struct rpc_msg *);
@@ -450,16 +452,16 @@ makefd_xprt(int fd, u_int sendsz, u_int recvsz)
     svc_vc_ops(xprt);
 
 #if XDR_VREC
-    /* parallel send/recv */
+    /* parallel send/recv and scatter-gather i/o */
     xdr_vrec_create(&(cd->xdrs_in),
-                    XDR_VREC_IN, xprt, readv_vc, NULL, recvsz,
+                    XDR_DECODE, xprt, readv_vc, NULL, recvsz,
                     VREC_FLAG_NONE);
 
     xdr_vrec_create(&(cd->xdrs_out),
-                    XDR_VREC_OUT, xprt, NULL, writev_vc, sendsz,
+                    XDR_ENCODE, xprt, NULL, writev_vc, sendsz,
                     VREC_FLAG_NONE);
 #else
-    /* XXX */
+    /* parallel send/recv */
     xdrrec_create(&(cd->xdrs_in), sendsz, recvsz, xprt,
                   read_vc, write_vc);
     xdrrec_create(&(cd->xdrs_out), sendsz, recvsz, xprt,
@@ -1589,16 +1591,16 @@ SVCXPRT *svc_vc_create_xprt(u_long sendsz, u_long recvsz)
     cd->strm_stat = XPRT_IDLE;
 
 #if XDR_VREC
-    /* parallel send/recv */
+    /* parallel send/recv and scatter-gather i/o */
     xdr_vrec_create(&(cd->xdrs_in),
-                    XDR_VREC_IN, xprt, readv_vc, NULL, recvsz,
+                    XDR_DECODE, xprt, readv_vc, NULL, recvsz,
                     VREC_FLAG_NONE);
 
     xdr_vrec_create(&(cd->xdrs_out),
-                    XDR_VREC_OUT, xprt, NULL, writev_vc, sendsz,
+                    XDR_ENCODE, xprt, NULL, writev_vc, sendsz,
                     VREC_FLAG_NONE);
 #else
-    /* XXX */
+    /* parallel send/recv */
     xdrrec_create(&(cd->xdrs_in), sendsz, recvsz, xprt,
                   read_vc, write_vc);
     xdrrec_create(&(cd->xdrs_out), sendsz, recvsz, xprt,

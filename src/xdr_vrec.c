@@ -93,6 +93,17 @@ static bool vrec_get_input_segments(V_RECSTREAM *, int);
         (pos)->boff = 0; \
     } while (0);
 
+#define reset_vrec(vrec) \
+    do { \
+        if ((vrec)->xoff) { \
+            (vrec)->base -= (vrec)->xoff; \
+            (vrec)->size += (vrec)->xoff; \
+            (vrec)->xoff = 0; \
+        } \
+        (vrec)->off = 0; \
+        (vrec)->len = 0; \
+    } while (0);
+
 /* not intended to be general--we know fpos->vrec is head of queue */
 #define init_lpos(lpos, fpos) \
     do { \
@@ -217,6 +228,7 @@ vrec_init_ioq(V_RECSTREAM *vstrm)
     vrec->base = vrec_alloc_buffer(vrec->size);
     vrec->off = 0;
     vrec->len = 0;
+    vrec->xoff = 0;
     vrec->flags = VREC_FLAG_RECLAIM;
     vrec_append_rec(&vstrm->ioq, vrec);
 }
@@ -261,8 +273,8 @@ vrec_stream_reset(V_RECSTREAM *vstrm, enum vrec_cursor wh_pos)
         vrec_stream_reset(vstrm, VREC_LPOS);
         /* XXX */
         pos = vrec_fpos(vstrm);
-        pos->vrec->off = 0;
-        pos->vrec->len = 0;
+        if (pos->vrec)
+            reset_vrec(pos->vrec);
         return;
         break;
     default:
@@ -293,6 +305,9 @@ vrec_truncate_input_q(V_RECSTREAM *vstrm, int max)
          */
         while (unlikely(vstrm->ioq.size > max)) {
             vrec = TAILQ_LAST(&vstrm->ioq.q, vrq_tailq);
+            /* XXX guard should be superfluous... */
+            if (!vrec)
+                break;
             TAILQ_REMOVE(&vstrm->ioq.q, vrec, ioq);
             (vstrm->ioq.size)--;
             /* almost certainly recycles */
@@ -408,8 +423,9 @@ xdr_vrec_create(XDR *xdrs,
     case XDR_DECODE:
         vstrm->ops.readv = xreadv;
         vrec_init_ioq(vstrm);
-        vstrm->st_u.in.readahead_bytes = 1200; /* XXX PMTU? */
+        vstrm->st_u.in.readahead_bytes = 512; /* XXX PMTU? */
         vstrm->st_u.in.fbtbc = 0;
+        vstrm->st_u.in.rbtbc = 0;
         vstrm->st_u.in.buflen = 0;
         vstrm->st_u.in.haveheader = FALSE;
         vstrm->st_u.in.last_frag = FALSE; /* do NOT use if !haveheader */
@@ -455,9 +471,6 @@ xdr_vrec_getlong(XDR *xdrs,  long *lp)
                     *lp = (long)ntohl(*buf);
                     pos->boff += sizeof(int32_t);
                     pos->loff += sizeof(int32_t);
-                    /* next vrec? */
-                    if (pos->boff >= pos->vrec->len) /* XXX == */
-                        (void) vrec_next(vstrm, VREC_LPOS, VREC_FLAG_NONE);
                 } else {
                     /* CASE 1.2: vrec_next */
                     (void) vrec_next(vstrm, VREC_LPOS, VREC_FLAG_NONE);
@@ -474,9 +487,9 @@ xdr_vrec_getlong(XDR *xdrs,  long *lp)
                 } else {
                     /* CASE 2.2: need getbytes */
                     if (! xdr_vrec_getbytes(
-                            xdrs, (char *)(void *)buf, sizeof(int32_t)))
+                            xdrs, (char *)(void *)lp, sizeof(int32_t)))
                         return (FALSE);
-                    *lp = (long)ntohl(*buf);
+                    *lp = (long)ntohl(*lp);
                 }
             }
             break;
@@ -1161,6 +1174,10 @@ decode_fragment_header(V_RECSTREAM *vstrm, u_int32_t header)
         vstrm->st_u.in.fbtbc = header & (~LAST_FRAG);
         vstrm->st_u.in.haveheader = TRUE;
 
+        __warnx(TIRPC_DEBUG_FLAG_XDRREC,
+                "%s fbtbc %ld last_frag %d\n",
+                __func__, vstrm->st_u.in.fbtbc, vstrm->st_u.in.last_frag);
+
         return (TRUE);
     }
     return (FALSE);
@@ -1177,11 +1194,25 @@ vrec_set_input_fragment(V_RECSTREAM *vstrm)
 
     pos = vrec_fpos(vstrm); /* XXX multiple fragments? */
 
-    /* XXX assumes we have not already read into the next buffer--that
-     * assumption could change.  if so, we would move the vrec at fill
-     * position to the head of ioq, shift vrec->off, vrec->len, and
-     * vstrm->st_u.in.buflen, and omit stream reset (we might add a flags
-     * arg to vrec_truncate input_q).*/
+    if (vstrm->st_u.in.rbtbc) {
+        /* the current segment contains stream readahead bytes. */
+        pos->vrec->xoff = pos->vrec->len + sizeof(u_int32_t);
+        pos->vrec->size =- pos->vrec->xoff;
+        pos->vrec->base += pos->vrec->len;
+        header = *((u_int32_t *) pos->vrec->base);
+        if (likely(decode_fragment_header(vstrm, header))) {
+            pos->vrec->base += sizeof(u_int32_t);
+            pos->vrec->off = 0;
+            /* omit stream reset (we might add a flags arg to
+             * vrec_truncate input_q). */
+            init_lpos(vrec_lpos(vstrm), vrec_fpos(vstrm));
+            vstrm->st_u.in.rbtbc = 0;
+            return (TRUE);
+        }
+        /* XXX */
+        abort();
+    }
+
     vstrm->st_u.in.buflen = 0;
     vrec_truncate_input_q(vstrm, 8);
     init_lpos(vrec_lpos(vstrm), vrec_fpos(vstrm));
@@ -1206,21 +1237,43 @@ restart:
     if (likely(nbytes > 0)) {
         delta = (nbytes - sizeof(u_int32_t));
         if (likely(decode_fragment_header(vstrm, header))) {
-            __warnx(TIRPC_DEBUG_FLAG_XDRREC,
-                    "%s fbtbc %ld de1ta %ld\n",
-                    __func__, vstrm->st_u.in.fbtbc, delta);
             if (delta > vstrm->st_u.in.fbtbc) {
-                /* XXX if this case happens, we need to process a header
-                 * in the interior of a buffer (shift_pos is intended to
-                 * indicate to skiprecord that we did that, by moving the
-                 * current vrec to the head of the queue, and starting its
-                 * offset at the read point, after the header).  I'm not
-                 * clear it does happen */
-                abort(); /* TODO: shift_pos */
+                /* shift_pos indicates to skiprecord that the current
+                 * segment contains stream readahead bytes.  we expect to
+                 * handle these just in time, by moving the current vrec to
+                 * the head of the queue (if it isn't already), and starting
+                 * its offset at the read point, after the header. */
+                __warnx(TIRPC_DEBUG_FLAG_XDRREC,
+                        "%s fbtbc %ld de1ta %ld\n",
+                        __func__, vstrm->st_u.in.fbtbc, delta);
+
+                vstrm->st_u.in.rbtbc = delta - vstrm->st_u.in.fbtbc;
+                if (vstrm->st_u.in.rbtbc >= sizeof(u_int32_t)) {
+                    __warnx(TIRPC_DEBUG_FLAG_XDRREC,
+                            "%s shift_pos: rbtbc %ld\n",
+                            __func__, vstrm->st_u.in.rbtbc);
+
+
+                    pos->vrec->len += vstrm->st_u.in.fbtbc;
+                    vstrm->st_u.in.buflen += vstrm->st_u.in.fbtbc;
+                    vstrm->st_u.in.fbtbc = 0;
+                    return (TRUE);
+                }
+                vstrm->st_u.in.rbtbc = 0;
             }
+
+            __warnx(TIRPC_DEBUG_FLAG_XDRREC,
+                    "%s before decrement by delta: fbtbc %ld de1ta %ld\n",
+                    __func__, vstrm->st_u.in.fbtbc, delta);
+
             pos->vrec->len += delta;
             vstrm->st_u.in.buflen += delta;
             vstrm->st_u.in.fbtbc -= delta; /* bytes read count against fbtbc */
+
+            __warnx(TIRPC_DEBUG_FLAG_XDRREC,
+                    "%s before decrement by delta: fbtbc %ld de1ta %ld\n",
+                    __func__, vstrm->st_u.in.fbtbc, delta);
+
             return (TRUE);
         }
     } else {
@@ -1245,9 +1298,14 @@ vrec_skip_input_bytes(V_RECSTREAM *vstrm, long cnt)
     int ix;
     u_int32_t nbytes, resid, header = 0;
     struct iovec *iov;
+    bool adj;
+
+    __warnx(TIRPC_DEBUG_FLAG_XDRREC,
+            "%s enter fbtbc %ld cnt %ld\n",
+            __func__, vstrm->st_u.in.fbtbc, cnt);
 
     while (cnt > 0) {
-        for (ix = 0, nbytes = 0, resid = cnt;
+        for (ix = 0, nbytes = 0, resid = cnt, adj = FALSE;
              ((resid > 0) && (ix < VREC_NSINK)); ++ix) {
             iov = &(vstrm->iovsink[ix]);
             iov->iov_len = MIN(resid, VREC_DISCARD_BUFSZ);
@@ -1256,14 +1314,14 @@ vrec_skip_input_bytes(V_RECSTREAM *vstrm, long cnt)
         }
         /* on fragment boundary, try to read the next header */
         if (nbytes == cnt) {
-            iov = &(vstrm->iovsink[VREC_STATIC_FRAG]);
+            iov = &(vstrm->iovsink[(ix++)]);
             iov->iov_base = &header;
-            /* iov->iov_len = sizeof(u_int32_t); */
-            ++ix;
+            iov->iov_len = sizeof(u_int32_t);
+            adj++;
         }
         nbytes = vstrm->ops.readv(vstrm->vp_handle,
                                   (struct iovec *) &(vstrm->iovsink),
-                                  ix+1 /* iovcnt */,
+                                  ix /* iovcnt */,
                                   VREC_FLAG_NONE);
         if (unlikely(nbytes < 0)) {
             __warnx(TIRPC_DEBUG_FLAG_XDRREC, "%s ops.readv failed %d\n",
@@ -1271,11 +1329,20 @@ vrec_skip_input_bytes(V_RECSTREAM *vstrm, long cnt)
             return; /* XXX is there any way to recover? */
         } else {
             /* bytes read into current fragment count against fbtbc */
+
             __warnx(TIRPC_DEBUG_FLAG_XDRREC,
-                    "%s fbtbc %ld nbytes %ld\n",
+                    "%s before decrement by nbytes: fbtbc %ld nbytes %ld\n",
                     __func__, vstrm->st_u.in.fbtbc, nbytes);
+
+            if (adj)
+                nbytes -= sizeof(u_int32_t);
+
             vstrm->st_u.in.fbtbc -= nbytes;
             cnt -= nbytes;
+
+            __warnx(TIRPC_DEBUG_FLAG_XDRREC,
+                    "%s after decrement by nbytes: fbtbc %ld nbytes %ld\n",
+                    __func__, vstrm->st_u.in.fbtbc, nbytes);
         }
     } /* while */
 
@@ -1319,9 +1386,11 @@ static bool vrec_get_input_segments(V_RECSTREAM *vstrm, int cnt)
     for (ix = 0; ((ix < VREC_NFILL) && (resid > 0)); ++ix) {
         vstrm->st_u.in.buflen += iov[ix].iov_len;
         /* bytes read count against fbtbc */
+
         __warnx(TIRPC_DEBUG_FLAG_XDRREC,
-                "%s fbtbc %ld iov_len %ld\n",
+                "%s before decrement by iov_len: fbtbc %ld iov_len %ld\n",
                 __func__, vstrm->st_u.in.fbtbc, iov[ix].iov_len);
+
         vstrm->st_u.in.fbtbc -= iov[ix].iov_len;
         vrecs[ix]->len = iov[ix].iov_len;
         resid -= iov[ix].iov_len;
