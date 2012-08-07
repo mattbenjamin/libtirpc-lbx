@@ -301,9 +301,9 @@ vrec_truncate_input_q(V_RECSTREAM *vstrm, int max)
     }
 
     switch (vstrm->direction) {
-    case XDR_VREC_IN:
+    case XDR_DECODE:
         break;
-    case XDR_VREC_OUT:
+    case XDR_ENCODE:
         vstrm->st_u.out.frag_len = 0;
         break;
     default:
@@ -376,7 +376,7 @@ vrec_next(V_RECSTREAM *vstrm, enum vrec_cursor wh_pos, u_int flags)
  */
 void
 xdr_vrec_create(XDR *xdrs,
-                enum xdr_vrec_direction direction, void *xhandle,
+                enum xdr_op direction, void *xhandle,
                 size_t (*xreadv)(void *, struct iovec *, int, u_int),
                 size_t (*xwritev)(void *, struct iovec *, int, u_int),
                 u_int def_bsize, u_int flags)
@@ -405,7 +405,7 @@ xdr_vrec_create(XDR *xdrs,
     vstrm->def_bsize = def_bsize;
 
     switch (direction) {
-    case XDR_VREC_IN:
+    case XDR_DECODE:
         vstrm->ops.readv = xreadv;
         vrec_init_ioq(vstrm);
         vstrm->st_u.in.readahead_bytes = 1200; /* XXX PMTU? */
@@ -416,7 +416,7 @@ xdr_vrec_create(XDR *xdrs,
         vstrm->st_u.in.next_frag = FALSE;
         vrec_truncate_input_q(vstrm, 8);
         break;
-    case XDR_VREC_OUT:
+    case XDR_ENCODE:
         vstrm->ops.writev = xwritev;
         vrec_init_ioq(vstrm);
         vrec_truncate_output_q(vstrm, 8);
@@ -443,11 +443,8 @@ xdr_vrec_getlong(XDR *xdrs,  long *lp)
     int32_t *buf = NULL;
 
     switch (vstrm->direction) {
-    case XDR_VREC_IN:
+    case XDR_DECODE:
         switch (xdrs->x_op) {
-        case XDR_ENCODE:
-            abort();
-            break;
         case XDR_DECODE:
             /* CASE 1:  re-consuming bytes in a stream (after SETPOS/rewind) */
             if (pos->loff < vstrm->st_u.in.buflen) {
@@ -483,12 +480,13 @@ xdr_vrec_getlong(XDR *xdrs,  long *lp)
                 }
             }
             break;
+        case XDR_ENCODE:
         default:
             abort();
             break;
         }
         break;
-    case XDR_VREC_OUT:
+    case XDR_ENCODE:
         switch (xdrs->x_op) {
         case XDR_ENCODE:
             /* CASE 1:  we can only be re-consuming bytes in a stream
@@ -557,11 +555,8 @@ xdr_vrec_getbytes(XDR *xdrs, char *addr, u_int len)
     u_long cbtbc;
 
     switch (vstrm->direction) {
-    case XDR_VREC_IN:
+    case XDR_DECODE:
         switch (xdrs->x_op) {
-        case XDR_ENCODE:
-            abort();
-            break;
         case XDR_DECODE:
             pos = vrec_lpos(vstrm);
         restart:
@@ -600,12 +595,13 @@ xdr_vrec_getbytes(XDR *xdrs, char *addr, u_int len)
                 goto restart;
             }
             break;
+        case XDR_ENCODE:
         default:
             abort();
             break;
         }
         break;
-    case XDR_VREC_OUT:
+    case XDR_ENCODE:
         switch (xdrs->x_op) {
         case XDR_ENCODE:
             /* TODO: implement */
@@ -633,10 +629,7 @@ xdr_vrec_putbytes(XDR *xdrs, const char *addr, u_int len)
     int delta;
 
     switch (vstrm->direction) {
-    case XDR_VREC_IN:
-        abort();
-        break;
-    case XDR_VREC_OUT:
+    case XDR_ENCODE:
         while (len > 0) {
             pos = vrec_fpos(vstrm);
             delta = MIN(len,  pos->vrec->size - pos->vrec->len);
@@ -657,6 +650,7 @@ xdr_vrec_putbytes(XDR *xdrs, const char *addr, u_int len)
             len -= delta;
         }
         break;
+    case XDR_DECODE:
     default:
         abort();
         break;
@@ -686,11 +680,8 @@ xdr_vrec_getbufs(XDR *xdrs, xdr_uio *uio, u_int len, u_int flags)
     ix = 0;
 
     switch (vstrm->direction) {
-    case XDR_VREC_IN:
+    case XDR_DECODE:
         switch (xdrs->x_op) {
-        case XDR_ENCODE:
-            abort();
-            break;
         case XDR_DECODE:
         restart:
             /* CASE 1:  re-consuming bytes in a stream (after SETPOS/rewind) */
@@ -726,12 +717,13 @@ xdr_vrec_getbufs(XDR *xdrs, xdr_uio *uio, u_int len, u_int flags)
                 goto restart;
             }
             break;
+        case XDR_ENCODE:
         default:
             abort();
             break;
         }
         break;
-    case XDR_VREC_OUT:
+    case XDR_ENCODE:
         switch (xdrs->x_op) {
         case XDR_ENCODE:
             /* TODO: implement */
@@ -840,11 +832,8 @@ xdr_vrec_inline(XDR *xdrs, u_int len)
      * the current logical offset in the stream. */
 
     switch (vstrm->direction) {
-    case XDR_VREC_IN:
+    case XDR_DECODE:
         switch (xdrs->x_op) {
-        case XDR_ENCODE:
-            abort();
-            break;
         case XDR_DECODE:
             pos = vrec_lpos(vstrm);
             if ((vstrm->st_u.in.buflen - pos->loff) >= len) {
@@ -855,12 +844,13 @@ xdr_vrec_inline(XDR *xdrs, u_int len)
                 }
             }
             break;
+        case XDR_ENCODE:
         default:
             abort();
             break;
         }
         break;
-    case XDR_VREC_OUT:
+    case XDR_ENCODE:
         switch (xdrs->x_op) {
         case XDR_ENCODE:
             pos = vrec_fpos(vstrm);
@@ -909,12 +899,12 @@ xdr_vrec_control(XDR *xdrs, /* const */ int rq, void *in)
 
     switch (rq) {
     case VREC_GET_READAHEAD:
-        if (vstrm->direction != XDR_VREC_IN)
+        if (vstrm->direction != XDR_DECODE)
             return (FALSE);
         *(u_int *)in = vstrm->st_u.in.readahead_bytes;
         break;
     case VREC_SET_READAHEAD:
-        if (vstrm->direction != XDR_VREC_IN)
+        if (vstrm->direction != XDR_DECODE)
             return (FALSE);
         vstrm->st_u.in.readahead_bytes = *(u_int *)in;
         break;
@@ -945,7 +935,7 @@ xdr_vrec_skiprecord(XDR *xdrs)
     V_RECSTREAM *vstrm = (V_RECSTREAM *)(xdrs->x_private);
 
     switch (vstrm->direction) {
-    case XDR_VREC_IN:
+    case XDR_DECODE:
         switch (xdrs->x_op) {
         case XDR_DECODE:
         restart:
@@ -988,7 +978,7 @@ xdr_vrec_skiprecord(XDR *xdrs)
             break;
         }
         break;
-    case XDR_VREC_OUT:
+    case XDR_ENCODE:
     default:
         abort();
         break;
@@ -1012,7 +1002,7 @@ xdr_vrec_eof(XDR *xdrs)
      * deal with this? */
 
     switch (vstrm->direction) {
-    case XDR_VREC_IN:
+    case XDR_DECODE:
         switch (xdrs->x_op) {
         case XDR_DECODE:
             pos = vrec_lpos(vstrm); /* XXX not sure req. yet... */
@@ -1042,7 +1032,7 @@ xdr_vrec_eof(XDR *xdrs)
             break;
         }
         break;
-    case XDR_VREC_OUT:
+    case XDR_ENCODE:
     default:
         abort();
         break;

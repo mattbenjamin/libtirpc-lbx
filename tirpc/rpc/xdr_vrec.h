@@ -66,12 +66,6 @@ struct vrec_prealloc
     struct v_rec_queue v_req_buf;
 };
 
-/* streams are unidirectional */
-enum xdr_vrec_direction {
-    XDR_VREC_IN,
-    XDR_VREC_OUT,
-};
-
 #define VREC_NSINK 2
 #define VREC_NSTATIC (VREC_NSINK + 1)
 #define VREC_STATIC_FRAG (VREC_NSTATIC-1)
@@ -79,7 +73,9 @@ enum xdr_vrec_direction {
 
 struct v_rec_strm
 {
-    enum xdr_vrec_direction direction;
+
+    /* xdr_vrec streams are unidirectional */
+    enum xdr_op direction;
 
     /* buffer queues */
     struct v_rec_queue ioq;
@@ -140,7 +136,7 @@ typedef struct v_rec_strm V_RECSTREAM;
 
 /* vector equivalents */
 
-extern void xdr_vrec_create(XDR *, enum xdr_vrec_direction, void *,
+extern void xdr_vrec_create(XDR *, enum xdr_op, void *,
                             size_t (*)(void *, struct iovec *, int, u_int),
                             size_t (*)(void *, struct iovec *, int, u_int),
                             u_int, u_int);
