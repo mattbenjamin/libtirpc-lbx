@@ -423,7 +423,7 @@ xdr_vrec_create(XDR *xdrs,
     case XDR_DECODE:
         vstrm->ops.readv = xreadv;
         vrec_init_ioq(vstrm);
-        vstrm->st_u.in.readahead_bytes = 512; /* XXX PMTU? */
+        vstrm->st_u.in.readahead_bytes = 200; /* XXX PMTU? */
         vstrm->st_u.in.fbtbc = 0;
         vstrm->st_u.in.rbtbc = 0;
         vstrm->st_u.in.buflen = 0;
@@ -896,6 +896,9 @@ xdr_vrec_destroy(XDR *xdrs)
 
     /* release queued buffers */
     while (vstrm->ioq.size > 0) {
+        /* XXX */
+        if (! vrec)
+            break;
         vrec = TAILQ_FIRST(&vstrm->ioq.q);
         vrec_rele(vstrm, vrec);
         TAILQ_REMOVE(&vstrm->ioq.q, vrec, ioq);
@@ -1164,7 +1167,8 @@ decode_fragment_header(V_RECSTREAM *vstrm, u_int32_t header)
      */
     if (header) {
         header = ntohl(header);
-        if (header == 0) {
+        /* XXX have seen head==1, in error */
+        if (header < 4 /* == 0 */) {
             vstrm->st_u.in.haveheader = FALSE;
             return(FALSE);
         }
@@ -1203,10 +1207,16 @@ vrec_set_input_fragment(V_RECSTREAM *vstrm)
         if (likely(decode_fragment_header(vstrm, header))) {
             pos->vrec->base += sizeof(u_int32_t);
             pos->vrec->off = 0;
+            /* bytes read ahead count against fbtbc */
+            vstrm->st_u.in.buflen =
+                vstrm->st_u.in.rbtbc - sizeof(u_int32_t);
+            vstrm->st_u.in.fbtbc -=
+                vstrm->st_u.in.buflen;
+            vstrm->st_u.in.rbtbc = 0;
             /* omit stream reset (we might add a flags arg to
              * vrec_truncate input_q). */
+            /* XXX conditionally move vrec to head? */
             init_lpos(vrec_lpos(vstrm), vrec_fpos(vstrm));
-            vstrm->st_u.in.rbtbc = 0;
             return (TRUE);
         }
         /* XXX */
@@ -1243,23 +1253,16 @@ restart:
                  * handle these just in time, by moving the current vrec to
                  * the head of the queue (if it isn't already), and starting
                  * its offset at the read point, after the header. */
-                __warnx(TIRPC_DEBUG_FLAG_XDRREC,
-                        "%s fbtbc %ld de1ta %ld\n",
-                        __func__, vstrm->st_u.in.fbtbc, delta);
-
                 vstrm->st_u.in.rbtbc = delta - vstrm->st_u.in.fbtbc;
-                if (vstrm->st_u.in.rbtbc >= sizeof(u_int32_t)) {
-                    __warnx(TIRPC_DEBUG_FLAG_XDRREC,
-                            "%s shift_pos: rbtbc %ld\n",
-                            __func__, vstrm->st_u.in.rbtbc);
 
+                __warnx(TIRPC_DEBUG_FLAG_XDRREC,
+                        "%s shift_pos: fbtbc %ld rbtbc %ld\n",
+                        __func__, vstrm->st_u.in.fbtbc, vstrm->st_u.in.rbtbc);
 
-                    pos->vrec->len += vstrm->st_u.in.fbtbc;
-                    vstrm->st_u.in.buflen += vstrm->st_u.in.fbtbc;
-                    vstrm->st_u.in.fbtbc = 0;
-                    return (TRUE);
-                }
-                vstrm->st_u.in.rbtbc = 0;
+                pos->vrec->len += vstrm->st_u.in.fbtbc;
+                vstrm->st_u.in.buflen += vstrm->st_u.in.fbtbc;
+                vstrm->st_u.in.fbtbc = 0;
+                return (TRUE);
             }
 
             __warnx(TIRPC_DEBUG_FLAG_XDRREC,
