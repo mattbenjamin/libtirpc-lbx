@@ -423,7 +423,7 @@ xdr_vrec_create(XDR *xdrs,
     case XDR_DECODE:
         vstrm->ops.readv = xreadv;
         vrec_init_ioq(vstrm);
-        vstrm->st_u.in.readahead_bytes = 200; /* XXX PMTU? */
+        vstrm->st_u.in.readahead_bytes = 1200; /* XXX PMTU? */
         vstrm->st_u.in.fbtbc = 0;
         vstrm->st_u.in.rbtbc = 0;
         vstrm->st_u.in.buflen = 0;
