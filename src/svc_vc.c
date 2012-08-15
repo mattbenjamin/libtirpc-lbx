@@ -68,7 +68,7 @@
 #include "clnt_internal.h"
 #include "svc_internal.h"
 #include "svc_xprt.h"
-#include "vc_lock.h"
+#include "rpc_dplx_internal.h"
 #include <rpc/svc_rqst.h>
 #include <rpc/xdr_vrec.h>
 
@@ -1463,8 +1463,8 @@ svc_vc_create_from_clnt(CLIENT *cl,
 
     fd = cx->cx_fd;
     thr_sigsetmask(SIG_SETMASK, (sigset_t *) 0, &mask);
-
-    vc_fd_lock_c(cl, &mask);
+    rpc_dplx_slc(cl, &mask);
+    rpc_dplx_rlc(cl, &mask);
 
     /*
      * make a new transport
@@ -1539,7 +1539,8 @@ svc_vc_create_from_clnt(CLIENT *cl,
     }
 
 unlock:
-    vc_fd_unlock(fd, &mask);
+    rpc_dplx_ruc(cl, &mask);
+    rpc_dplx_suc(cl, &mask);
 
     return (xprt);
 }
