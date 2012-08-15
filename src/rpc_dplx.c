@@ -1,626 +1,319 @@
 /*
- * Copyright (c) 2009, Sun Microsystems, Inc.
+ * Copyright (c) 2012 Linux Box Corporation.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- * - Redistributions of source code must retain the above copyright notice,
- *   this list of conditions and the following disclaimer.
- * - Redistributions in binary form must reproduce the above copyright notice,
- *   this list of conditions and the following disclaimer in the documentation
- *   and/or other materials provided with the distribution.
- * - Neither the name of Sun Microsystems, Inc. nor the names of its
- *   contributors may be used to endorse or promote products derived
- *   from this software without specific prior written permission.
+ * modification, are permitted provided that the following conditions
+ * are met:
+ * 1. Redistributions of source code must retain the above copyright
+ *    notice, this list of conditions and the following disclaimer.
+ * 2. Redistributions in binary form must reproduce the above copyright
+ *    notice, this list of conditions and the following disclaimer in the
+ *    documentation and/or other materials provided with the distribution.
  *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
- * ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
- * LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
- * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
- * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
- * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
- * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
- * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGE.
- */
-
-/*
- * rpc_dplx.c
- *
- * Copyright (C) 1984, Sun Microsystems, Inc.
- *
+ * THIS SOFTWARE IS PROVIDED BY THE AUTHOR `AS IS'' AND ANY EXPRESS OR
+ * IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES
+ * OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
+ * IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY DIRECT, INDIRECT,
+ * INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT
+ * NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+ * DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+ * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+ * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
+ * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
 #include <config.h>
-#include <assert.h>
-#include <stdlib.h>
-#include <string.h>
 
+#include <pthread.h>
+#include <reentrant.h>
+#include <sys/types.h>
+#include <sys/poll.h>
+#include <err.h>
+#include <errno.h>
+#include <unistd.h>
+#include <signal.h>
+
+#include <rpc/types.h>
 #include <rpc/rpc.h>
-#include <rpc/xdr_inline.h>
-#include <rpc/auth_inline.h>
 
-#include <sys/select.h>
+#ifdef PORTMAP
+#include <rpc/pmap_clnt.h>
+#endif /* PORTMAP */
 
-static const struct xdr_discrim reply_dscrm[3] = {
-    { (int)MSG_ACCEPTED, (xdrproc_t)xdr_accepted_reply },
-    { (int)MSG_DENIED, (xdrproc_t)xdr_rejected_reply },
-    { __dontcare__, NULL_xdrproc_t } };
+#include "rpc_com.h"
+#include <rpc/svc.h>
+#include <misc/rbtree_x.h>
+#include "clnt_internal.h"
+#include "rpc_dplx_internal.h"
 
-/*
- * XDR a duplex call message
- */
-bool
-xdr_dplx_msg(XDR *xdrs, struct rpc_msg *dmsg)
-{
-    int32_t *buf;
-    struct opaque_auth *oa;
+/* public */
 
-    assert(xdrs != NULL);
-    assert(dmsg != NULL);
-
-    if (xdrs->x_op == XDR_ENCODE) {
-        if (dmsg->rm_call.cb_cred.oa_length > MAX_AUTH_BYTES) {
-            return (FALSE);
-        }
-        if (dmsg->rm_call.cb_verf.oa_length > MAX_AUTH_BYTES) {
-            return (FALSE);
-        }
-        buf = XDR_INLINE(xdrs, 8 * BYTES_PER_XDR_UNIT
-                         + RNDUP(dmsg->rm_call.cb_cred.oa_length)
-                         + 2 * BYTES_PER_XDR_UNIT
-                         + RNDUP(dmsg->rm_call.cb_verf.oa_length));
-        if (buf != NULL) {
-            IXDR_PUT_INT32(buf, dmsg->rm_xid);
-            IXDR_PUT_ENUM(buf, dmsg->rm_direction);
-            switch (dmsg->rm_direction) {
-            case CALL:
-                __warnx(TIRPC_DEBUG_FLAG_RPC_MSG,
-                        "%s 1: XDR_ENCODE INLINE CALL", __func__);
-                IXDR_PUT_INT32(buf, dmsg->rm_call.cb_rpcvers);
-                if (dmsg->rm_call.cb_rpcvers != RPC_MSG_VERSION) {
-                    return (FALSE);
-                }
-                IXDR_PUT_INT32(buf, dmsg->rm_call.cb_prog);
-                IXDR_PUT_INT32(buf, dmsg->rm_call.cb_vers);
-                IXDR_PUT_INT32(buf, dmsg->rm_call.cb_proc);
-                oa = &dmsg->rm_call.cb_cred;
-                IXDR_PUT_ENUM(buf, oa->oa_flavor);
-                IXDR_PUT_INT32(buf, oa->oa_length);
-                if (oa->oa_length) {
-                    memmove(buf, oa->oa_base, oa->oa_length);
-                    buf += RNDUP(oa->oa_length) / sizeof (int32_t);
-                }
-                oa = &dmsg->rm_call.cb_verf;
-                IXDR_PUT_ENUM(buf, oa->oa_flavor);
-                IXDR_PUT_INT32(buf, oa->oa_length);
-                if (oa->oa_length) {
-                    memmove(buf, oa->oa_base, oa->oa_length);
-                    /* no real need.... XXX next line uncommented (matt) */
-                    buf += RNDUP(oa->oa_length) / sizeof (int32_t);
-                }
-                return (TRUE);
-                break;
-            case REPLY:
-                __warnx(TIRPC_DEBUG_FLAG_RPC_MSG,
-                        "%s 2: INLINE un impl. XDR_ENCODE REPLY", __func__);
-                return (inline_xdr_union(
-                            xdrs, (enum_t *)&(dmsg->rm_reply.rp_stat),
-                            (caddr_t)(void *)&(dmsg->rm_reply.ru),
-                            reply_dscrm,
-                            NULL_xdrproc_t));
-                break;
-            default:
-                /* unlikely */
-                return (FALSE);
-            }
-        } else {
-            /* ! inline */
-            if (
-                inline_xdr_u_int32_t(xdrs, &(dmsg->rm_xid)) &&
-                inline_xdr_enum(xdrs, (enum_t *)&(dmsg->rm_direction))) {
-                switch (dmsg->rm_direction) {
-                case CALL:
-                    __warnx(TIRPC_DEBUG_FLAG_RPC_MSG,
-                            "%s 3: non-INLINE inline XDR_ENCODE CALL",
-                            __func__);
-                    if (
-                        inline_xdr_u_int32_t(
-                            xdrs, &(dmsg->rm_call.cb_rpcvers)) &&
-                        (dmsg->rm_call.cb_rpcvers == RPC_MSG_VERSION) &&
-                        inline_xdr_u_int32_t(
-                            xdrs, &(dmsg->rm_call.cb_prog)) &&
-                        inline_xdr_u_int32_t(xdrs, &(dmsg->rm_call.cb_vers)) &&
-                        inline_xdr_u_int32_t(xdrs, &(dmsg->rm_call.cb_proc)) &&
-                        inline_xdr_opaque_auth(
-                            xdrs, &(dmsg->rm_call.cb_cred)) )
-                        return (
-                            inline_xdr_opaque_auth(
-                                xdrs, &(dmsg->rm_call.cb_verf)));
-                    break;
-                case REPLY:
-                    __warnx(TIRPC_DEBUG_FLAG_RPC_MSG,
-                            "%s 4: non INLINE need inline impl. "
-                            "XDR_ENCODE REPLY",
-                            __func__);
-                    return (
-                        inline_xdr_union(
-                            xdrs,
-                            (enum_t *)&(dmsg->rm_reply.rp_stat),
-                            (caddr_t)(void *)&(dmsg->rm_reply.ru),
-                            reply_dscrm,
-                            NULL_xdrproc_t));
-                default:
-                    /* unlikely */
-                    return (FALSE);
-                }
-            }
-        }
-    } /* XDR_ENCODE */
-    if (xdrs->x_op == XDR_DECODE) {
-        buf = XDR_INLINE(xdrs, 8 * BYTES_PER_XDR_UNIT);
-        if (buf != NULL) {
-            dmsg->rm_xid = IXDR_GET_U_INT32(buf);
-            dmsg->rm_direction = IXDR_GET_ENUM(buf, enum msg_type);
-            switch (dmsg->rm_direction) {
-            case CALL:
-                __warnx(TIRPC_DEBUG_FLAG_RPC_MSG,
-                        "%s 5: XDR_DECODE INLINE CALL", __func__);
-                dmsg->rm_call.cb_rpcvers = IXDR_GET_U_INT32(buf);
-                if (dmsg->rm_call.cb_rpcvers != RPC_MSG_VERSION) {
-                    return (FALSE);
-                }
-                dmsg->rm_call.cb_prog = IXDR_GET_U_INT32(buf);
-                dmsg->rm_call.cb_vers = IXDR_GET_U_INT32(buf);
-                dmsg->rm_call.cb_proc = IXDR_GET_U_INT32(buf);
-                oa = &dmsg->rm_call.cb_cred;
-                oa->oa_flavor = IXDR_GET_ENUM(buf, enum_t);
-                oa->oa_length = (u_int)IXDR_GET_U_INT32(buf);
-                if (oa->oa_length) {
-                    if (oa->oa_length > MAX_AUTH_BYTES) {
-                        return (FALSE);
-                    }
-                    if (oa->oa_base == NULL) {
-                        oa->oa_base = (caddr_t)
-                            mem_alloc(oa->oa_length);
-                        if (oa->oa_base == NULL)
-                            return (FALSE);
-                    }
-                    buf = XDR_INLINE(xdrs, RNDUP(oa->oa_length));
-                    if (buf == NULL) {
-                        if (inline_xdr_opaque(
-                                xdrs, oa->oa_base,
-                                oa->oa_length) == FALSE) {
-                            return (FALSE);
-                        }
-                    } else {
-                        memmove(oa->oa_base, buf,
-                                oa->oa_length);
-                        /* no real need... XXX uncommented (matt) */
-                        buf += RNDUP(oa->oa_length) / sizeof (int32_t);
-                    }
-                }
-                oa = &dmsg->rm_call.cb_verf;
-                buf = XDR_INLINE(xdrs, 2 * BYTES_PER_XDR_UNIT);
-                if (buf == NULL) {
-                    if (inline_xdr_enum(xdrs, &oa->oa_flavor) == FALSE ||
-                        inline_xdr_u_int(xdrs, &oa->oa_length) == FALSE) {
-                        return (FALSE);
-                    }
-                } else {
-                    oa->oa_flavor = IXDR_GET_ENUM(buf, enum_t);
-                    oa->oa_length = (u_int)IXDR_GET_U_INT32(buf);
-                }
-                if (oa->oa_length) {
-                    if (oa->oa_length > MAX_AUTH_BYTES) {
-                        return (FALSE);
-                    }
-                    if (oa->oa_base == NULL) {
-                        oa->oa_base = (caddr_t)
-                            mem_alloc(oa->oa_length);
-                        if (oa->oa_base == NULL)
-                            return (FALSE);
-                    }
-                    buf = XDR_INLINE(xdrs, RNDUP(oa->oa_length));
-                    if (buf == NULL) {
-                        if (inline_xdr_opaque(xdrs, oa->oa_base,
-                                              oa->oa_length) == FALSE) {
-                            return (FALSE);
-                        }
-                    } else {
-                        memmove(oa->oa_base, buf,
-                                oa->oa_length);
-                        /* no real need... */
-                        buf += RNDUP(oa->oa_length) / sizeof (int32_t);
-                    }
-                }
-                return (TRUE);
-                break;
-            case REPLY:
-                __warnx(TIRPC_DEBUG_FLAG_RPC_MSG,
-                        "%s 6: INLINE XDR_ENCODE REPLY (not properly "
-                        "INLINE, not reached?)", __func__);
-                return (inline_xdr_union(
-                            xdrs,
-                            (enum_t *)&(dmsg->rm_reply.rp_stat),
-                            (caddr_t)(void *)&(dmsg->rm_reply.ru),
-                            reply_dscrm,
-                            NULL_xdrproc_t));
-
-                break;
-            default:
-                /* unlikely */
-                return (FALSE);
-            }
-        } else {
-            /* ! inline */
-            if (
-                inline_xdr_u_int32_t(xdrs, &(dmsg->rm_xid)) &&
-                inline_xdr_enum(xdrs, (enum_t *)&(dmsg->rm_direction))) {
-                switch (dmsg->rm_direction) {
-                case CALL:
-                    __warnx(TIRPC_DEBUG_FLAG_RPC_MSG,
-                            "%s 7: non-inline CALL", __func__);
-                    if (
-                        inline_xdr_u_int32_t(
-                            xdrs, &(dmsg->rm_call.cb_rpcvers)) &&
-                        (dmsg->rm_call.cb_rpcvers == RPC_MSG_VERSION) &&
-                        inline_xdr_u_int32_t(
-                            xdrs, &(dmsg->rm_call.cb_prog)) &&
-                        inline_xdr_u_int32_t(
-                            xdrs, &(dmsg->rm_call.cb_vers)) &&
-                        inline_xdr_u_int32_t(
-                            xdrs, &(dmsg->rm_call.cb_proc)) &&
-                        inline_xdr_opaque_auth(
-                            xdrs, &(dmsg->rm_call.cb_cred)) )
-                        return (
-                            inline_xdr_opaque_auth(
-                                xdrs, &(dmsg->rm_call.cb_verf)));
-                    break;
-                case REPLY:
-                    __warnx(TIRPC_DEBUG_FLAG_RPC_MSG,
-                            "%s 8: non-INLINE REPLY", __func__);
-                    if (! inline_xdr_enum(
-                            xdrs, (enum_t *) &(dmsg->rm_reply.rp_stat)))
-                        return (FALSE);
-                    switch (dmsg->rm_reply.rp_stat) {
-                    case MSG_ACCEPTED:
-                    {
-                        struct accepted_reply *ar =
-                            (struct accepted_reply *)
-                            &(dmsg->rm_reply.ru);
-                        if (! inline_xdr_opaque_auth(
-                                xdrs, &(ar->ar_verf)))
-                            return (FALSE);
-                        if (! inline_xdr_enum(
-                                xdrs, (enum_t *)&(ar->ar_stat)))
-                            return (FALSE);
-                        switch (ar->ar_stat) {
-                        case SUCCESS:
-                            return ((*(ar->ar_results.proc))
-                                    (xdrs, &(ar->ar_results.where)));
-
-                        case PROG_MISMATCH:
-                            if (! inline_xdr_u_int32_t(
-                                    xdrs, &(ar->ar_vers.low)))
-                                return (FALSE);
-                            return (inline_xdr_u_int32_t(
-                                        xdrs, &(ar->ar_vers.high)));
-
-                        case GARBAGE_ARGS:
-                        case SYSTEM_ERR:
-                        case PROC_UNAVAIL:
-                        case PROG_UNAVAIL:
-                            /* TRUE */
-                            break;
-                        default:
-                            break;
-                        } /* ar_stat */
-                        return (TRUE);
-                    } /* MSG_ACCEPTED */
-                    break;
-                    case MSG_DENIED:
-                    {
-                        /* XXX branch not verified */
-                        __warnx(TIRPC_DEBUG_FLAG_RPC_MSG,
-                                "non-inline MSG_DENIED not verified");
-                        struct rejected_reply *rr =
-                            (struct rejected_reply *)
-                            &(dmsg->rm_reply.ru);
-                        if (! inline_xdr_enum(
-                                xdrs, (enum_t *)&(rr->rj_stat)))
-                            return (FALSE);
-                        switch (rr->rj_stat) {
-
-                        case RPC_MISMATCH:
-                            if (! inline_xdr_u_int32_t(
-                                    xdrs, &(rr->rj_vers.low)))
-                                return (FALSE);
-                            return (inline_xdr_u_int32_t(
-                                        xdrs, &(rr->rj_vers.high)));
-
-                        case AUTH_ERROR:
-                            return (inline_xdr_enum(
-                                        xdrs, (enum_t *)&(rr->rj_why)));
-                        }
-                        return (TRUE);
-                    }
-                    break;
-                    default:
-                        return (FALSE);
-                        break;
-                    } /* rm_reply.rp_stat */
-                default:
-                    /* unlikely */
-                    return (FALSE);
-                }
-            }
-        }
-    } /* XDR_DECODE */
-    return (FALSE);
-} /* new */
-
-
-/* 2-stage decode */
-
-bool
-xdr_dplx_msg_decode_start(xdrs, dmsg)
-    XDR *xdrs;
-    struct rpc_msg *dmsg;
-{
-    int32_t *buf;
-
-    assert(xdrs != NULL);
-    assert(dmsg != NULL);
-
-    assert(xdrs->x_op == XDR_DECODE);
-
-    /* begin call consumes only the header */
-
-    buf = dmsg->rm_ibuf = XDR_INLINE(xdrs, 8 * BYTES_PER_XDR_UNIT);
-
-    if (buf != NULL) {
-        dmsg->rm_xid = IXDR_GET_U_INT32(buf);
-        dmsg->rm_direction = IXDR_GET_ENUM(buf, enum msg_type);
-        switch (dmsg->rm_direction) {
-        case CALL:
-            dmsg->rm_call.cb_rpcvers = IXDR_GET_U_INT32(buf);
-            if (dmsg->rm_call.cb_rpcvers != RPC_MSG_VERSION)
-                return (FALSE);
-            /* get program and version information early */
-            dmsg->rm_call.cb_prog = IXDR_GET_U_INT32(buf);
-            dmsg->rm_call.cb_vers = IXDR_GET_U_INT32(buf);
-            dmsg->rm_call.cb_proc = IXDR_GET_U_INT32(buf);
-            return (TRUE);
-            break;
-        case REPLY:
-            /* in continuation */
-            return (TRUE);
-            break;
-        default:
-            /* unlikely */
-            return (FALSE);
-        }
-    } else { /* ! buf, couldn't INLINE */
-        if (! (inline_xdr_u_int32_t(xdrs, &(dmsg->rm_xid)) &&
-               inline_xdr_enum(xdrs, (enum_t *) &(dmsg->rm_direction))))
-            return (FALSE);
-        switch (dmsg->rm_direction) {
-        case CALL:
-            if (! ((inline_xdr_u_int32_t(
-                        xdrs, &(dmsg->rm_call.cb_rpcvers))) &&
-                   (dmsg->rm_call.cb_rpcvers != RPC_MSG_VERSION)))
-                return (FALSE);
-            /* get program and version information early */
-            if (! ((inline_xdr_u_int32_t(xdrs, &(dmsg->rm_call.cb_prog))) &&
-                   (inline_xdr_u_int32_t(xdrs, &(dmsg->rm_call.cb_vers))) &&
-                   (inline_xdr_u_int32_t(xdrs, &(dmsg->rm_call.cb_proc)))))
-                return (FALSE);
-            return (TRUE);
-            break;
-        case REPLY:
-            /* in continuation */
-            return (TRUE);
-            break;
-        default:
-            /* unlikely */
-            return (FALSE);
-        }
-    } /* ! inline */
-
-    return (FALSE);
+void rpc_dplx_send_lock_impl(SVCXPRT *xprt, sigset_t *mask,
+                             const char *file,
+                             int line)
+{ 
+    vc_fd_send_lock(xprt, mask, file, line);
 }
 
-bool
-xdr_dplx_msg_decode_continue(xdrs, dmsg)
-    XDR *xdrs;
-    struct rpc_msg *dmsg;
+void svc_dplx_unlock_x(SVCXPRT *xprt, sigset_t *mask)
 {
-    int32_t *buf;
-    struct opaque_auth *oa;
+    vc_fd_unlock_x(xprt, mask);
+}
 
-    assert(xdrs != NULL);
-    assert(dmsg != NULL);
+/* private */
 
-    assert(xdrs->x_op == XDR_DECODE);
+#define RPC_DPLX_PARTITIONS 17
 
-    buf = dmsg->rm_ibuf;
+static bool initialized = FALSE;
 
-    if (buf != NULL) {
-        /* continue where we left off */
-        switch (dmsg->rm_direction) {
-        case CALL:
-            oa = &dmsg->rm_call.cb_cred;
-            oa->oa_flavor = IXDR_GET_ENUM(buf, enum_t);
-            oa->oa_length = (u_int)IXDR_GET_U_INT32(buf);
-            if (oa->oa_length) {
-                if (oa->oa_length > MAX_AUTH_BYTES) {
-                    return (FALSE);
-                }
-                if (oa->oa_base == NULL) {
-                    oa->oa_base = (caddr_t)
-                        mem_alloc(oa->oa_length);
-                    if (oa->oa_base == NULL)
-                        return (FALSE);
-                }
-                buf = XDR_INLINE(xdrs, RNDUP(oa->oa_length));
-                if (buf == NULL) {
-                    if (inline_xdr_opaque(
-                            xdrs, oa->oa_base,
-                            oa->oa_length) == FALSE) {
-                        return (FALSE);
-                    }
-                } else {
-                    memmove(oa->oa_base, buf,
-                            oa->oa_length);
-                    /* no real need... XXX uncommented (matt) */
-                    buf += RNDUP(oa->oa_length) / sizeof (int32_t);
-                }
-            }
-            oa = &dmsg->rm_call.cb_verf;
-            buf = XDR_INLINE(xdrs, 2 * BYTES_PER_XDR_UNIT);
-            if (buf == NULL) {
-                if (inline_xdr_enum(xdrs, &oa->oa_flavor) == FALSE ||
-                    inline_xdr_u_int(xdrs, &oa->oa_length) == FALSE) {
-                    return (FALSE);
-                }
-            } else {
-                oa->oa_flavor = IXDR_GET_ENUM(buf, enum_t);
-                oa->oa_length = (u_int)IXDR_GET_U_INT32(buf);
-            }
-            if (oa->oa_length) {
-                if (oa->oa_length > MAX_AUTH_BYTES) {
-                    return (FALSE);
-                }
-                if (oa->oa_base == NULL) {
-                    oa->oa_base = (caddr_t)
-                        mem_alloc(oa->oa_length);
-                    if (oa->oa_base == NULL)
-                        return (FALSE);
-                }
-                buf = XDR_INLINE(xdrs, RNDUP(oa->oa_length));
-                if (buf == NULL) {
-                    if (inline_xdr_opaque(xdrs, oa->oa_base,
-                                          oa->oa_length) == FALSE) {
-                        return (FALSE);
-                    }
-                } else {
-                    memmove(oa->oa_base, buf,
-                            oa->oa_length);
-                    /* no real need... */
-                    buf += RNDUP(oa->oa_length) / sizeof (int32_t);
-                }
-            }
-            return (TRUE);
-            break;
-        case REPLY:
-            __warnx(TIRPC_DEBUG_FLAG_RPC_MSG,
-                    "%s 6: INLINE XDR_ENCODE REPLY (not properly "
-                    "INLINE, not reached?)", __func__);
-            return (inline_xdr_union(
-                        xdrs,
-                        (enum_t *)&(dmsg->rm_reply.rp_stat),
-                        (caddr_t)(void *)&(dmsg->rm_reply.ru),
-                        reply_dscrm,
-                        NULL_xdrproc_t));
+static struct rpc_dplx_rec_set rpc_dplx_rec_set = {
+    PTHREAD_MUTEX_INITIALIZER /* clnt_fd_lock */,
+    { 0, NULL } /* xt */
+};
 
-            break;
-        default:
-            /* unlikely */
-            return (FALSE);
-        }
-    } else {
-        /* ! inline */
-        switch (dmsg->rm_direction) {
-        case CALL:
-            __warnx(TIRPC_DEBUG_FLAG_RPC_MSG,
-                    "%s 7: non-inline CALL", __func__);
-            if (inline_xdr_opaque_auth(
-                    xdrs, &(dmsg->rm_call.cb_cred)) )
-                return (
-                    inline_xdr_opaque_auth(
-                        xdrs, &(dmsg->rm_call.cb_verf)));
-            break;
-        case REPLY:
-            __warnx(TIRPC_DEBUG_FLAG_RPC_MSG,
-                    "%s 8: non-INLINE REPLY", __func__);
-            if (! inline_xdr_enum(
-                    xdrs, (enum_t *) &(dmsg->rm_reply.rp_stat)))
-                return (FALSE);
-            switch (dmsg->rm_reply.rp_stat) {
-            case MSG_ACCEPTED:
-            {
-                struct accepted_reply *ar =
-                    (struct accepted_reply *)
-                    &(dmsg->rm_reply.ru);
-                if (! inline_xdr_opaque_auth(
-                        xdrs, &(ar->ar_verf)))
-                    return (FALSE);
-                if (! inline_xdr_enum(
-                        xdrs, (enum_t *)&(ar->ar_stat)))
-                    return (FALSE);
-                switch (ar->ar_stat) {
-                case SUCCESS:
-                    return ((*(ar->ar_results.proc))
-                            (xdrs, &(ar->ar_results.where)));
+static inline int
+rpc_dplx_cmpf(const struct opr_rbtree_node *lhs,
+              const struct opr_rbtree_node *rhs)
+{
+    struct rpc_dplx_rec *lk, *rk;
 
-                case PROG_MISMATCH:
-                    if (! inline_xdr_u_int32_t(
-                            xdrs, &(ar->ar_vers.low)))
-                        return (FALSE);
-                    return (inline_xdr_u_int32_t(
-                                xdrs, &(ar->ar_vers.high)));
+    lk = opr_containerof(lhs, struct rpc_dplx_rec, node_k);
+    rk = opr_containerof(rhs, struct rpc_dplx_rec, node_k);
 
-                case GARBAGE_ARGS:
-                case SYSTEM_ERR:
-                case PROC_UNAVAIL:
-                case PROG_UNAVAIL:
-                    /* TRUE */
-                    break;
-                default:
-                    break;
-                } /* ar_stat */
-                return (TRUE);
-            } /* MSG_ACCEPTED */
-            break;
-            case MSG_DENIED:
-            {
-                /* XXX branch not verified */
-                __warnx(TIRPC_DEBUG_FLAG_RPC_MSG,
-                        "non-inline MSG_DENIED not verified");
-                struct rejected_reply *rr =
-                    (struct rejected_reply *)
-                    &(dmsg->rm_reply.ru);
-                if (! inline_xdr_enum(
-                        xdrs, (enum_t *)&(rr->rj_stat)))
-                    return (FALSE);
-                switch (rr->rj_stat) {
+    if (lk->fd_k < rk->fd_k)
+        return (-1);
 
-                case RPC_MISMATCH:
-                    if (! inline_xdr_u_int32_t(
-                            xdrs, &(rr->rj_vers.low)))
-                        return (FALSE);
-                    return (inline_xdr_u_int32_t(
-                                xdrs, &(rr->rj_vers.high)));
+    if (lk->fd_k == rk->fd_k)
+        return (0);
 
-                case AUTH_ERROR:
-                    return (inline_xdr_enum(
-                                xdrs, (enum_t *)&(rr->rj_why)));
-                }
-                return (TRUE);
-            }
-            break;
-            default:
-                return (FALSE);
-                break;
-            } /* rm_reply.rp_stat */
-        default:
-            /* unlikely */
-            return (FALSE);
-        }
+    return (1);
+}
+
+void rpc_dplx_init()
+{
+    int code = 0;
+
+    mutex_lock(&vc_fd_rec_set.clnt_fd_lock);
+
+    if (initialized)
+        goto unlock;
+
+    /* one of advantages of this RBT is convenience of external
+     * iteration, we'll go to that shortly */
+    code = rbtx_init(&vc_fd_rec_set.xt, vc_fd_cmpf /* NULL (inline) */,
+                     VC_LOCK_PARTITIONS, RBT_X_FLAG_ALLOC);
+    if (code)
+        __warnx(TIRPC_DEBUG_FLAG_LOCK,
+                "vc_lock_init: rbtx_init failed");
+
+    initialized = TRUE;
+
+unlock:
+    mutex_unlock(&vc_fd_rec_set.clnt_fd_lock);
+}
+
+#define cond_init_rpc_dplx() { \
+        do { \
+            if (! initialized) \
+                rpc_dplx_init(); \
+        } while (0); \
     }
 
-    return (FALSE);
+/* CLNT/SVCXPRT structures keep a reference to their associated rpc_dplx_rec
+ * structures in private data.  this way we can make the lock/unlock ops
+ * inline, and the amortized cost of this change for locks is 0. */
+
+static inline struct rpc_dplx_rec *
+alloc_dplx_rec(void)
+{
+    struct rpc_dplx_rec *rec = mem_alloc(sizeof(struct rpc_dplx_rec));
+    if (rec) {
+        rec->refcnt = 0;
+        rec->lock_flag_value = 0;
+        spin_init(&rec->sp);
+        mutex_init(&rec->mtx, NULL);
+        cond_init(&rec->cv, 0, NULL);
+    }
+    return (rec);
+}
+
+static inline void
+free_dplx_rec(struct rpc_dplx_rec *rec)
+{
+    mutex_destroy(&rec->mtx);
+    cond_destroy(&rec->cv);
+    mem_free(rec, sizeof(struct rpc_dplx_rec));
+}
+
+struct rpc_dplx_rec *
+rpc_dplx_lookup_rec(int fd)
+{
+    struct rbtree_x_part *t;
+    struct rpc_dplx_rec rk, *rec = NULL;
+    struct opr_rbtree_node *nv;
+
+    cond_init_rpc_dplx();
+
+    rk.fd_k = fd;
+    t = rbtx_partition_of_scalar(&(rpc_dplx_rec_set.xt), fd);
+
+    /* find or install a vc_fd_rec at fd */
+    rwlock_rdlock(&t->lock);
+    nv = opr_rbtree_lookup(&t->t, &rk.node_k);
+
+    /* XXX rework lock+insert case, so that new entries are inserted
+     * locked, and t->lock critical section is reduced */
+
+    if (! nv) {
+        rwlock_unlock(&t->lock);
+        rwlock_wrlock(&t->lock);
+        nv = opr_rbtree_lookup(&t->t, &rk.node_k);
+        if (! nv) {
+            rec = alloc_dplx_rec();
+            if (! rec) {
+                __warnx(TIRPC_DEBUG_FLAG_LOCK,
+                        "%s: failed allocating vc_fd_rec", __func__);
+                goto unlock;
+            }
+
+            /* XXX allocation fail */
+            rec->fd_k = fd;
+
+            /* tracks outstanding calls */
+            opr_rbtree_init(&crec->calls.t, call_xid_cmpf);
+            rec->calls.xid = 0; /* next xid is 1 */
+
+            if (opr_rbtree_insert(&t->t, &rec->node_k)) {
+                /* cant happen */
+                __warnx(TIRPC_DEBUG_FLAG_LOCK,
+                        "%s: collision inserting in locked rbtree partition",
+                        __func__);
+                free_dplx_rec(rec);
+            }
+        }
+    }
+    else
+        rec = opr_containerof(nv, struct rpc_dplx_rec, node_k);
+
+    rpc_dplx_ref(rec, VC_LOCK_FLAG_NONE);
+
+unlock:
+    rwlock_unlock(&t->lock);
+
+    return (rec);
+}
+
+void vc_fd_lock(int fd, sigset_t *mask)
+{
+    sigset_t newmask;
+    struct rpc_dplx_rec *rec = rpc_dplx_lookup_rec(fd);
+
+    assert(rec);
+
+    sigfillset(&newmask);
+    sigdelset(&newmask, SIGINT); /* XXXX debugger */
+    thr_sigsetmask(SIG_SETMASK, &newmask, mask);
+
+    mutex_lock(&rec->mtx);
+    while (rec->lock_flag_value) {
+        cond_wait(&rec->cv, &rec->mtx);
+    }
+    rec->lock_flag_value = rpc_lock_value;
+    mutex_unlock(&rec->mtx);
+}
+
+void vc_fd_unlock(int fd, sigset_t *mask)
+{
+    struct vc_fd_rec *rec = rpc_dplx_lookup_rec(fd);
+
+    assert(rec);
+
+    mutex_lock(&rec->mtx);
+    rec->lock_flag_value = rpc_flag_clear;
+    mutex_unlock(&rec->mtx);
+    thr_sigsetmask(SIG_SETMASK, mask, (sigset_t *) NULL);
+    cond_signal(&rec->cv);
+}
+
+void vc_fd_wait(int fd, uint32_t wait_for)
+{
+    struct vc_fd_rec *rec = rpc_dplx_lookup_rec(fd);
+    vc_fd_wait_impl(rec, wait_for);
+}
+
+void vc_fd_signal(int fd, uint32_t flags)
+{
+    struct vc_fd_rec *crec = vc_lookup_fd_rec(fd);
+    vc_fd_signal_impl(crec, flags);
+}
+
+int32_t
+rpc_dplx_unref(struct rp_dplx_rec *rec, u_int flags)
+{
+    struct rbtree_x_part *t;
+    struct opr_rbtree_node *nv;
+    int32_t refcnt;
+
+    if (! (flags & VC_LOCK_FLAG_MTX_LOCKED))
+        mutex_lock(&rec->mtx);
+
+    refcnt = --(rec->refcnt);
+
+    if (rec->refcnt == 0) {
+        t = rbtx_partition_of_scalar(&rpc_dplx_rec_set.xt, rec->fd_k);
+        mutex_unlock(&rec->mtx);
+        rwlock_wrlock(&t->lock);
+        nv = opr_rbtree_lookup(&t->t, &rec->node_k);
+        if (nv) {
+            rec = opr_containerof(nv, struct rpc_dplx_rec, node_k);
+            mutex_lock(&crec->mtx);
+            if (rec->refcnt == 0) {
+                (void) opr_rbtree_remove(&t->t, &rec->node_k);
+                mutex_unlock(&rec->mtx);
+                free_dplx_rec(rec);
+                rec = NULL;
+            } else
+                refcnt = rec->refcnt;
+        }
+        rwlock_unlock(&t->lock);
+    }
+
+    if (crec && (! (flags & VC_LOCK_FLAG_MTX_LOCKED)))
+        mutex_unlock(&rec->mtx);
+
+    return (refcnt);
+}
+
+void rpc_dplx_shutdown()
+{
+    struct rbtree_x_part *t = NULL;
+    struct opr_rbtree_node *n;
+    struct vc_fd_rec *rec = NULL;
+    int p_ix;
+
+    cond_init_rpc_dplx();
+
+    /* concurrent, restartable iteration over t */
+    p_ix = 0;
+    while (p_ix < VC_LOCK_PARTITIONS) {
+        t = &rpc_dplx_rec_set.xt.tree[p_ix];
+        rwlock_rdlock(&t->lock); /* t RLOCKED */
+        n = opr_rbtree_first(&t->t);
+        while (n != NULL) {
+            rec = opr_containerof(n, struct rpc_dplx_rec, node_k);
+            opr_rbtree_remove(&t->t, &rec->node_k);
+            free_dplx_rec(rec);
+            n = opr_rbtree_first(&t->t);
+        } /* curr partition */
+        rwlock_unlock(&t->lock); /* t !LOCKED */
+        rwlock_destroy(&t->lock);
+        p_ix++;
+    } /* VC_LOCK_PARTITIONS */
+
+    /* free tree */
+    mem_free(rpc_dplx_rec_set.xt.tree,
+             VC_LOCK_PARTITIONS*sizeof(struct rbtree_x_part));
+
+    /* set initialized = FALSE? */
 }

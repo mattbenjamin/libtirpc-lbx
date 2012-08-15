@@ -23,13 +23,14 @@
  * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-#ifndef TIRPC_VC_LOCK_H
-#define TIRPC_VC_LOCK_H
+#ifndef RPC_DPLX_INTERNAL_H
+#define RPC_DPLX_INTERNAL_H
 
-struct vc_fd_rec; /* in clnt_internal.h (avoids circular dependency) */
+struct rpc_dplx_rec; /* in clnt_internal.h (avoids circular dependency) */
 
-struct vc_fd_rec_set
+struct rpc_dplx_rec_set
 {
+    /* XXX check (dplx correct?) */
     mutex_t clnt_fd_lock; /* global mtx we'll try to spam less than formerly */
     struct rbtree_x xt;
 };
@@ -38,9 +39,9 @@ struct vc_fd_rec_set
 #define rpc_flag_clear 0
 #define rpc_lock_value 1
 
-#define VC_LOCK_FLAG_NONE          0x0000
-#define VC_LOCK_FLAG_MTX_LOCKED    0x0001
-#define VC_LOCK_FLAG_LOCK          0x0002 /* take crec->mtx before signal */
+#define RPC_DPLX_FLAG_NONE          0x0000
+#define RPC_DPLX_FLAG_SPIN_LOCKED   0x0001
+#define RPC_DPLX_FLAG_LOCK          0x0002 /* take rec->mtx before signal */
 
 #ifndef HAVE_STRLCAT
 extern size_t strlcat(char *dst, const char *src, size_t siz);
@@ -50,98 +51,106 @@ extern size_t strlcat(char *dst, const char *src, size_t siz);
 extern size_t strlcpy(char *dst, const char *src, size_t siz);
 #endif
 
-static inline int32_t vc_lock_ref(struct vc_fd_rec *crec, u_int flags)
+/* XXXX split send/recv! */
+
+static inline int32_t rpc_dplx_ref(struct rpc_dplx_rec *rec, u_int flags)
 {
     int32_t refcnt;
 
-    if (! (flags & VC_LOCK_FLAG_MTX_LOCKED))
-        mutex_lock(&crec->mtx);
+    if (! (flags & RPC_DPLX_FLAG_SPIN_LOCKED))
+        spin_lock(&rec->sp);
 
-    refcnt = ++(crec->refcnt);
+    refcnt = ++(rec->refcnt);
 
-    if (! (flags & VC_LOCK_FLAG_MTX_LOCKED))
-        mutex_unlock(&crec->mtx);
+    if (! (flags & RPC_DPLX_FLAG_SPIN_LOCKED))
+        spin_unlock(&rec->sp);
 
     return(refcnt);
 }
 
-int32_t vc_lock_unref(struct vc_fd_rec *crec, u_int flags);
+int32_t rpc_dplx_unref(struct rpc_dplx_rec *rec, u_int flags);
+
+/* XXXX next 2 need transform */
 void vc_fd_lock(int fd, sigset_t *mask);
 void vc_fd_unlock(int fd, sigset_t *mask);
-struct vc_fd_rec *vc_lookup_fd_rec(int fd);
 
-static inline void vc_lock_init_cl(CLIENT *cl)
+
+struct rpc_dplx_rec *rpc_dplx_lookup_rec(int fd);
+
+static inline
+void rpc_dplx_init_client(CLIENT *cl)
 {
-    /* XXX switch */
     struct cx_data *cx = (struct cx_data *) cl->cl_private;
-    if (! cx->cx_crec) {
-        /* many clients (and xprts) shall point to crec */
-        cx->cx_crec = vc_lookup_fd_rec(cx->cx_fd); /* ref+1 */
+    if (! cx->cx_rec) {
+        /* many clients (and xprts) shall point to rec */
+        cx->cx_rec = rpc_dplx_lookup_rec(cx->cx_fd); /* ref+1 */
     }
 }
 
-static inline void vc_lock_init_xprt(SVCXPRT *xprt)
+static inline
+void rpc_dplx_init_xprt(SVCXPRT *xprt)
 {
     if (! xprt->xp_p5) {
-        /* many xprts shall point to crec */
-        xprt->xp_p5 = vc_lookup_fd_rec(xprt->xp_fd); /* ref+1 */
+        /* many xprts shall point to rec */
+        xprt->xp_p5 = rpc_dplx_lookup_rec(xprt->xp_fd); /* ref+1 */
     }
 }
 
 #define AMTX 1
 
-static inline void vc_fd_lock_impl(struct vc_fd_rec *crec, sigset_t *mask,
-                                   const char *file, int line)
+static inline
+void vc_fd_lock_impl(struct rpc_dplx_rec *rec, sigset_t *mask,
+                     const char *file, int line)
 {
     sigset_t __attribute__((unused)) newmask;
 
 #if AMTX
-    mutex_lock(&crec->mtx);
+    mutex_lock(&rec->mtx);
 #else
     sigfillset(&newmask);
     sigdelset(&newmask, SIGINT); /* XXXX debugger */
     thr_sigsetmask(SIG_SETMASK, &newmask, mask);
 
-    mutex_lock(&crec->mtx);
-    while (crec->lock_flag_value)
-        cond_wait(&crec->cv, &crec->mtx);
-    crec->lock_flag_value = rpc_lock_value;
-    mutex_unlock(&crec->mtx);
+    mutex_lock(&rec->mtx);
+    while (rec->lock_flag_value)
+        cond_wait(&rec->cv, &rec->mtx);
+    rec->lock_flag_value = rpc_lock_value;
+    mutex_unlock(&rec->mtx);
 #endif
     if (__pkg_params.debug_flags & TIRPC_DEBUG_FLAG_LOCK) {
-        strlcpy(crec->locktrace.file, file, 32);
-        crec->locktrace.line = line;
+        strlcpy(rec->locktrace.file, file, 32);
+        rec->locktrace.line = line;
     }
 }
 
-static inline void vc_fd_unlock_impl(struct vc_fd_rec *crec, sigset_t *mask)
+static inline void vc_fd_unlock_impl(struct rpc_dplx_rec *rec, sigset_t *mask)
 {
 #if AMTX
-    mutex_unlock(&crec->mtx);
+    mutex_unlock(&rec->mtx);
 #else
-    mutex_lock(&crec->mtx);
-    crec->lock_flag_value = rpc_flag_clear;
-    cond_signal(&crec->cv);
-    mutex_unlock(&crec->mtx);
+    mutex_lock(&rec->mtx);
+    rec->lock_flag_value = rpc_flag_clear;
+    cond_signal(&rec->cv);
+    mutex_unlock(&rec->mtx);
     thr_sigsetmask(SIG_SETMASK, mask, (sigset_t *) NULL);
 #endif
 }
 
-static inline void vc_fd_wait_impl(struct vc_fd_rec *crec, uint32_t wait_for)
+static inline void vc_fd_wait_impl(struct rpc_dplx_rec *rec, uint32_t wait_for)
 {
-    mutex_lock(&crec->mtx);
-    while (crec->lock_flag_value != rpc_flag_clear)
-        cond_wait(&crec->cv, &crec->mtx);
-    mutex_unlock(&crec->mtx);
+    mutex_lock(&rec->mtx);
+    while (rec->lock_flag_value != rpc_flag_clear)
+        cond_wait(&rec->cv, &rec->mtx);
+    mutex_unlock(&rec->mtx);
 }
 
-static inline void vc_fd_signal_impl(struct vc_fd_rec *crec, uint32_t flags)
+static inline void vc_fd_signal_impl(struct rpc_dplx_rec *rec, uint32_t flags)
 {
-    if (flags & VC_LOCK_FLAG_LOCK)
-        mutex_lock(&crec->mtx);
-    cond_signal(&crec->cv);
-    if (flags & VC_LOCK_FLAG_LOCK)
-        mutex_unlock(&crec->mtx);
+    if (flags & RPC_DPLX_FLAG_LOCK)
+        mutex_lock(&rec->mtx);
+    cond_signal(&rec->cv);
+    if (flags & RPC_DPLX_FLAG_LOCK)
+        mutex_unlock(&rec->mtx);
 }
 
 #define vc_fd_lock_c(cl, mask) \
@@ -152,16 +161,16 @@ static inline void vc_fd_lock_c_impl(CLIENT *cl, sigset_t *mask,
 {
     struct cx_data *cx = (struct cx_data *) cl->cl_private;
 
-    vc_lock_init_cl(cl);
-    vc_fd_lock_impl(cx->cx_crec, mask, file, line);
+    rpc_dplx_init_client(cl);
+    vc_fd_lock_impl(cx->cx_rec, mask, file, line);
 }
 
 static inline void vc_fd_unlock_c(CLIENT *cl, sigset_t *mask)
 {
     struct cx_data *cx = (struct cx_data *) cl->cl_private;
 
-    /* unless lock order violation, cl is lock-initialized */
-    vc_fd_unlock_impl(cx->cx_crec, mask);
+    /* barring lock order violation, cl is lock-initialized */
+    vc_fd_unlock_impl(cx->cx_rec, mask);
 }
 
 void vc_fd_wait(int fd, uint32_t wait_for);
@@ -170,8 +179,8 @@ static inline void vc_fd_wait_c(CLIENT *cl, uint32_t wait_for)
 {
     struct cx_data *cx = (struct cx_data *) cl->cl_private;
 
-    vc_lock_init_cl(cl);
-    vc_fd_wait_impl(cx->cx_crec, wait_for);
+    rpc_dplx_init_client(cl);
+    vc_fd_wait_impl(cx->cx_rec, wait_for);
 }
 
 void vc_fd_signal(int fd, uint32_t flags);
@@ -180,45 +189,45 @@ static inline void vc_fd_signal_c(CLIENT *cl, uint32_t flags)
 {
     struct cx_data *cx = (struct cx_data *) cl->cl_private;
 
-    vc_lock_init_cl(cl);
-    vc_fd_signal_impl(cx->cx_crec, flags);
+    rpc_dplx_init_client(cl);
+    vc_fd_signal_impl(cx->cx_rec, flags);
 }
 
 static inline void vc_fd_lock_x(SVCXPRT *xprt, sigset_t *mask,
                                 const char *file, int line)
 { 
     vc_lock_init_xprt(xprt);
-    vc_fd_lock_impl((struct vc_fd_rec *) xprt->xp_p5, mask, file, line);
+    vc_fd_lock_impl((struct rpc_dplx_rec *) xprt->xp_p5, mask, file, line);
 }
 
 static inline void vc_fd_unlock_x(SVCXPRT *xprt, sigset_t *mask)
 {
     vc_lock_init_xprt(xprt);
-    vc_fd_unlock_impl((struct vc_fd_rec *) xprt->xp_p5, mask);
+    vc_fd_unlock_impl((struct rpc_dplx_rec *) xprt->xp_p5, mask);
 }
 
-static inline void vc_lock_unref_clnt(CLIENT *cl)
+static inline void rpc_dplx_unref_clnt(CLIENT *cl)
 {
     int32_t refcnt __attribute__((unused)) = 0;
     struct cx_data *cx = (struct cx_data *) cl->cl_private;
 
-    if (cx->cx_crec) {
-        refcnt = vc_lock_unref(cx->cx_crec, VC_LOCK_FLAG_NONE);
-        cx->cx_crec = NULL;
+    if (cx->cx_rec) {
+        refcnt = rpc_dplx_unref(cx->cx_rec, RPC_DPLX_FLAG_NONE);
+        cx->cx_rec = NULL;
     }
 }
 
-static inline void vc_lock_unref_xprt(SVCXPRT *xprt)
+static inline void rpc_dplx_unref_xprt(SVCXPRT *xprt)
 {
     int32_t refcnt __attribute__((unused)) = 0;
 
     if (xprt->xp_p5) {
-        refcnt = vc_lock_unref((struct vc_fd_rec *) xprt->xp_p5,
-                                 VC_LOCK_FLAG_NONE);
+        refcnt = rpc_dplx_unref((struct rpc_dplx_rec *) xprt->xp_p5,
+                                RPC_DPLX_FLAG_NONE);
         xprt->xp_p5 = NULL;
     }
 }
 
 void vc_lock_shutdown();
 
-#endif /* TIRPC_VC_LOCK_H */
+#endif /* RPC_DPLX_INTERNAL_H */

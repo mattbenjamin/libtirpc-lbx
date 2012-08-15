@@ -62,7 +62,7 @@
 #endif
 
 #include "clnt_internal.h"
-#include "vc_lock.h"
+#include "rpc_dplx_internal.h"
 
 #define MAX_DEFAULT_FDS                 20000
 
@@ -488,7 +488,7 @@ clnt_dg_freeres(CLIENT *cl, xdrproc_t xdr_res, void *res_ptr)
         dummy = (*xdr_res)(xdrs, res_ptr);
 
     thr_sigsetmask(SIG_SETMASK, &mask, NULL);
-    vc_fd_signal_c(cl, VC_LOCK_FLAG_NONE);
+    vc_fd_signal_c(cl, RPC_DPLX_FLAG_NONE);
 
 out:
     return (dummy);
@@ -654,7 +654,7 @@ clnt_dg_destroy(CLIENT *cl)
     XDR_DESTROY(&(CU_DATA(cx)->cu_outxdrs));
 
     thr_sigsetmask(SIG_SETMASK, &mask, NULL);
-    vc_fd_signal(cu_fd, VC_LOCK_FLAG_NONE);
+    vc_fd_signal(cu_fd, RPC_DPLX_FLAG_NONE);
 
     free_cx_data(cx);
 

@@ -23,15 +23,23 @@
  * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-#ifndef TIRPC_SVC_DPLX_H
-#define TIRPC_SVC_DPLX_H
+#ifndef RPC_DPLX_H
+#define RPC_DPLX_H
 
-/* channel locks using xprt handle */
-#define svc_dplx_lock_x(xprt, mask) \
-    svc_dplx_lock_x_impl(xprt, mask, __FILE__, __LINE__)
+#define rpc_dplx_send_lock(xprt, mask) \
+    rpc_dplx_send_lock_impl(xprt, mask, __FILE__, __LINE__)
 
-void svc_dplx_lock_x_impl(SVCXPRT *xprt, sigset_t *mask, const char *file,
-                          int line);
-void svc_dplx_unlock_x(SVCXPRT *xprt, sigset_t *mask);
+void rpc_dplx_send_lock_impl(SVCXPRT *xprt, sigset_t *mask,
+                             const char *file, int line);
 
-#endif /* TIRPC_SVC_DPLX_H */
+void rpc_dplx_send_unlock(SVCXPRT *xprt, sigset_t *mask);
+
+#define rpc_dplx_recv_lock(xprt, mask) \
+    rpc_dplx_recv_lock_impl(xprt, mask, __FILE__, __LINE__)
+
+void rpc_dplx_recv_lock_impl(SVCXPRT *xprt, sigset_t *mask,
+                             const char *file, int line);
+
+void rpc_dplx_recv_unlock(SVCXPRT *xprt, sigset_t *mask);
+
+#endif /* RPC_DPLX_H */
