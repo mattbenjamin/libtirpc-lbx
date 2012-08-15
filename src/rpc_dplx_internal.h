@@ -95,10 +95,10 @@ rpc_dplx_swi(struct rpc_dplx_rec *rec, uint32_t wait_for)
 {
     rpc_dplx_lock_t *lk = &rec->send.lock;
 
-    mutex_lock(&lk->mtx);
+    mutex_lock(&lk->we.mtx);
     while (lk->lock_flag_value != rpc_flag_clear)
-        cond_wait(&lk->cv, &lk->mtx);
-    mutex_unlock(&lk->mtx);
+        cond_wait(&lk->we.cv, &lk->we.mtx);
+    mutex_unlock(&lk->we.mtx);
 }
 
 /* swc: send wait clnt */ 
@@ -116,10 +116,10 @@ rpc_dplx_rwi(struct rpc_dplx_rec *rec, uint32_t wait_for)
 {
     rpc_dplx_lock_t *lk = &rec->recv.lock;
 
-    mutex_lock(&lk->mtx);
+    mutex_lock(&lk->we.mtx);
     while (lk->lock_flag_value != rpc_flag_clear)
-        cond_wait(&lk->cv, &lk->mtx);
-    mutex_unlock(&lk->mtx);
+        cond_wait(&lk->we.cv, &lk->we.mtx);
+    mutex_unlock(&lk->we.mtx);
 }
 
 /* rwc: recv wait clnt */ 
@@ -138,10 +138,10 @@ rpc_dplx_ssi(struct rpc_dplx_rec *rec, uint32_t flags)
     rpc_dplx_lock_t *lk = &rec->send.lock;
 
     if (flags & RPC_DPLX_FLAG_LOCK)
-        mutex_lock(&lk->mtx);
-    cond_signal(&lk->cv);
+        mutex_lock(&lk->we.mtx);
+    cond_signal(&lk->we.cv);
     if (flags & RPC_DPLX_FLAG_LOCK)
-        mutex_unlock(&lk->mtx);
+        mutex_unlock(&lk->we.mtx);
 }
 
 /* ssc: send signal clnt */

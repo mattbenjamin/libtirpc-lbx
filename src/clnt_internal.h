@@ -45,7 +45,7 @@ struct ct_wait_entry
 
 #include <misc/rbtree_x.h>
 
-struct rpc_dplx_lock
+typedef struct rpc_dplx_lock
 {
     struct ct_wait_entry we;
     int32_t lock_flag_value; /* XXX killme */
