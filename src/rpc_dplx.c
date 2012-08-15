@@ -49,16 +49,112 @@
 
 /* public */
 
-void rpc_dplx_send_lock_impl(SVCXPRT *xprt, sigset_t *mask,
-                             const char *file,
-                             int line)
+void
+rpc_dplx_slxi(SVCXPRT *xprt, sigset_t *mask, const char *file, int line)
 { 
-    vc_fd_send_lock(xprt, mask, file, line);
+    struct rpc_dplx_rec *rec;
+    rpc_dplx_lock_t *lk;
+
+    rpc_dplx_init_xprt(xprt);
+    rec = (struct rpc_dplx_rec *) xprt->xp_p5;
+    lk = &rec->send.lock;
+
+    mutex_lock(&lk->mtx);
+    if (__pkg_params.debug_flags & TIRPC_DEBUG_FLAG_LOCK) {
+        strlcpy(lk->locktrace.file, file, 32);
+        lk->locktrace.line = line;
+    }
 }
 
-void svc_dplx_unlock_x(SVCXPRT *xprt, sigset_t *mask)
+void
+rpc_dplx_sux(SVCXPRT *xprt, sigset_t *mask)
 {
-    vc_fd_unlock_x(xprt, mask);
+    struct rpc_dplx_rec *rec
+        = (struct rpc_dplx_rec *) xprt->xp_p5;
+    /* assert: initialized */
+    mutex_unlock(&rec->send.lock.mtx);
+}
+
+void
+rpc_dplx_rlxi(SVCXPRT *xprt, sigset_t *mask, const char *file, int line)
+{ 
+    struct rpc_dplx_rec *rec;
+    rpc_dplx_lock_t *lk;
+
+    rpc_dplx_init_xprt(xprt);
+    rec = (struct rpc_dplx_rec *) xprt->xp_p5;
+    lk = &rec->recv.lock;
+
+    mutex_lock(&lk->mtx);
+    if (__pkg_params.debug_flags & TIRPC_DEBUG_FLAG_LOCK) {
+        strlcpy(lk->locktrace.file, file, 32);
+        lk->locktrace.line = line;
+    }
+}
+
+void
+rpc_dplx_rux(SVCXPRT *xprt, sigset_t *mask)
+{
+    struct rpc_dplx_rec *rec
+        = (struct rpc_dplx_rec *) xprt->xp_p5;
+    /* assert: initialized */
+    mutex_unlock(&rec->recv.lock.mtx);
+}
+
+void
+rpc_dplx_slci(CLIENT *clnt, sigset_t *mask, const char *file, int line)
+{ 
+    struct cx_data *cx;
+    struct rpc_dplx_rec *rec;
+    rpc_dplx_lock_t *lk;
+
+    rpc_dplx_init_client(clnt);
+
+    cx = (struct cx_data *) clnt->cl_private;
+    rec = cx_rec;
+    lk = &rec->send.lock;
+
+    mutex_lock(&lk->mtx);
+    if (__pkg_params.debug_flags & TIRPC_DEBUG_FLAG_LOCK) {
+        strlcpy(lk->locktrace.file, file, 32);
+        lk->locktrace.line = line;
+    }
+}
+
+void
+rpc_dplx_suc(CLIENT *clnt, sigset_t *mask)
+{
+    struct cx_data *cx = (struct cx_data *) clnt->cl_private;
+    /* assert: initialized */
+    mutex_unlock(&cx->cx_rec->send.lock.mtx);
+}
+
+void
+rpc_dplx_rlci(CLIENT *clnt, sigset_t *mask, const char *file, int line)
+{ 
+    struct cx_data *cx;
+    struct rpc_dplx_rec *rec;
+    rpc_dplx_lock_t *lk;
+
+    rpc_dplx_init_client(clnt);
+
+    cx = (struct cx_data *) clnt->cl_private;
+    rec = cx_rec;
+    lk = &rec->recv.lock;
+
+    mutex_lock(&lk->mtx);
+    if (__pkg_params.debug_flags & TIRPC_DEBUG_FLAG_LOCK) {
+        strlcpy(lk->locktrace.file, file, 32);
+        lk->locktrace.line = line;
+    }
+}
+
+void
+rpc_dplx_ruc(CLIENT *clnt, sigset_t *mask)
+{
+    struct cx_data *cx = (struct cx_data *) clnt->cl_private;
+    /* assert: initialized */
+    mutex_unlock(&cx->cx_rec->recv.lock.mtx);
 }
 
 /* private */
@@ -204,48 +300,48 @@ unlock:
     return (rec);
 }
 
-void vc_fd_lock(int fd, sigset_t *mask)
+void
+rpc_dplx_slfi(int fd, sigset_t *mask, const char *file, int line)
 {
-    sigset_t newmask;
     struct rpc_dplx_rec *rec = rpc_dplx_lookup_rec(fd);
+    rpc_dplx_lock_t *lk = &rec->send.lock;
 
-    assert(rec);
-
-    sigfillset(&newmask);
-    sigdelset(&newmask, SIGINT); /* XXXX debugger */
-    thr_sigsetmask(SIG_SETMASK, &newmask, mask);
-
-    mutex_lock(&rec->mtx);
-    while (rec->lock_flag_value) {
-        cond_wait(&rec->cv, &rec->mtx);
+    mutex_lock(&lk->mtx);
+    if (__pkg_params.debug_flags & TIRPC_DEBUG_FLAG_LOCK) {
+        strlcpy(lk->locktrace.file, file, 32);
+        lk->locktrace.line = line;
     }
-    rec->lock_flag_value = rpc_lock_value;
-    mutex_unlock(&rec->mtx);
+
 }
 
-void vc_fd_unlock(int fd, sigset_t *mask)
+void
+rpc_dplx_suf(int fd, sigset_t *mask)
 {
-    struct vc_fd_rec *rec = rpc_dplx_lookup_rec(fd);
-
-    assert(rec);
-
-    mutex_lock(&rec->mtx);
-    rec->lock_flag_value = rpc_flag_clear;
-    mutex_unlock(&rec->mtx);
-    thr_sigsetmask(SIG_SETMASK, mask, (sigset_t *) NULL);
-    cond_signal(&rec->cv);
+    struct rpc_dplx_rec *rec = rpc_dplx_lookup_rec(fd);
+    /* assert: initialized */
+    mutex_unlock(&rec->send.lock.mtx);
 }
 
-void vc_fd_wait(int fd, uint32_t wait_for)
+void
+rpc_dplx_rlfi(int fd, sigset_t *mask, const char *file, int line)
 {
-    struct vc_fd_rec *rec = rpc_dplx_lookup_rec(fd);
-    vc_fd_wait_impl(rec, wait_for);
+    struct rpc_dplx_rec *rec = rpc_dplx_lookup_rec(fd);
+    rpc_dplx_lock_t *lk = &rec->recv.lock;
+
+    mutex_lock(&lk->mtx);
+    if (__pkg_params.debug_flags & TIRPC_DEBUG_FLAG_LOCK) {
+        strlcpy(lk->locktrace.file, file, 32);
+        lk->locktrace.line = line;
+    }
+
 }
 
-void vc_fd_signal(int fd, uint32_t flags)
+void
+rpc_dplx_ruf(int fd, sigset_t *mask)
 {
-    struct vc_fd_rec *crec = vc_lookup_fd_rec(fd);
-    vc_fd_signal_impl(crec, flags);
+    struct rpc_dplx_rec *rec = rpc_dplx_lookup_rec(fd);
+    /* assert: initialized */
+    mutex_unlock(&rec->recv.lock.mtx);
 }
 
 int32_t
@@ -254,6 +350,8 @@ rpc_dplx_unref(struct rp_dplx_rec *rec, u_int flags)
     struct rbtree_x_part *t;
     struct opr_rbtree_node *nv;
     int32_t refcnt;
+
+    /* XXXX refcnt now protected by spin lock */
 
     if (! (flags & VC_LOCK_FLAG_MTX_LOCKED))
         mutex_lock(&rec->mtx);

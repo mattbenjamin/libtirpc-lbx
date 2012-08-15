@@ -30,18 +30,17 @@ struct rpc_dplx_rec; /* in clnt_internal.h (avoids circular dependency) */
 
 struct rpc_dplx_rec_set
 {
-    /* XXX check (dplx correct?) */
-    mutex_t clnt_fd_lock; /* global mtx we'll try to spam less than formerly */
+    mutex_t clnt_fd_lock; /* XXX check dplx correctness */
     struct rbtree_x xt;
 };
 
-/* XXX perhaps better off as a flag bit */
+/* XXX perhaps better off as a flag bit (until we can remove it) */
 #define rpc_flag_clear 0
 #define rpc_lock_value 1
 
 #define RPC_DPLX_FLAG_NONE          0x0000
 #define RPC_DPLX_FLAG_SPIN_LOCKED   0x0001
-#define RPC_DPLX_FLAG_LOCK          0x0002 /* take rec->mtx before signal */
+#define RPC_DPLX_FLAG_LOCK          0x0002 /* take chan lock before signal */
 
 #ifndef HAVE_STRLCAT
 extern size_t strlcat(char *dst, const char *src, size_t siz);
@@ -50,30 +49,6 @@ extern size_t strlcat(char *dst, const char *src, size_t siz);
 #ifndef HAVE_STRLCPY
 extern size_t strlcpy(char *dst, const char *src, size_t siz);
 #endif
-
-/* XXXX split send/recv! */
-
-static inline int32_t rpc_dplx_ref(struct rpc_dplx_rec *rec, u_int flags)
-{
-    int32_t refcnt;
-
-    if (! (flags & RPC_DPLX_FLAG_SPIN_LOCKED))
-        spin_lock(&rec->sp);
-
-    refcnt = ++(rec->refcnt);
-
-    if (! (flags & RPC_DPLX_FLAG_SPIN_LOCKED))
-        spin_unlock(&rec->sp);
-
-    return(refcnt);
-}
-
-int32_t rpc_dplx_unref(struct rpc_dplx_rec *rec, u_int flags);
-
-/* XXXX next 2 need transform */
-void vc_fd_lock(int fd, sigset_t *mask);
-void vc_fd_unlock(int fd, sigset_t *mask);
-
 
 struct rpc_dplx_rec *rpc_dplx_lookup_rec(int fd);
 
@@ -96,120 +71,122 @@ void rpc_dplx_init_xprt(SVCXPRT *xprt)
     }
 }
 
-#define AMTX 1
-
-static inline
-void vc_fd_lock_impl(struct rpc_dplx_rec *rec, sigset_t *mask,
-                     const char *file, int line)
+static inline int32_t
+rpc_dplx_ref(struct rpc_dplx_rec *rec, u_int flags)
 {
-    sigset_t __attribute__((unused)) newmask;
+    int32_t refcnt;
 
-#if AMTX
-    mutex_lock(&rec->mtx);
-#else
-    sigfillset(&newmask);
-    sigdelset(&newmask, SIGINT); /* XXXX debugger */
-    thr_sigsetmask(SIG_SETMASK, &newmask, mask);
+    if (! (flags & RPC_DPLX_FLAG_SPIN_LOCKED))
+        spin_lock(&rec->sp);
 
-    mutex_lock(&rec->mtx);
-    while (rec->lock_flag_value)
-        cond_wait(&rec->cv, &rec->mtx);
-    rec->lock_flag_value = rpc_lock_value;
-    mutex_unlock(&rec->mtx);
-#endif
-    if (__pkg_params.debug_flags & TIRPC_DEBUG_FLAG_LOCK) {
-        strlcpy(rec->locktrace.file, file, 32);
-        rec->locktrace.line = line;
-    }
+    refcnt = ++(rec->refcnt);
+
+    if (! (flags & RPC_DPLX_FLAG_SPIN_LOCKED))
+        spin_unlock(&rec->sp);
+
+    return(refcnt);
 }
 
-static inline void vc_fd_unlock_impl(struct rpc_dplx_rec *rec, sigset_t *mask)
+int32_t rpc_dplx_unref(struct rpc_dplx_rec *rec, u_int flags);
+
+/* swi:  send wait impl */
+static inline void
+rpc_dplx_swi(struct rpc_dplx_rec *rec, uint32_t wait_for)
 {
-#if AMTX
-    mutex_unlock(&rec->mtx);
-#else
-    mutex_lock(&rec->mtx);
-    rec->lock_flag_value = rpc_flag_clear;
-    cond_signal(&rec->cv);
-    mutex_unlock(&rec->mtx);
-    thr_sigsetmask(SIG_SETMASK, mask, (sigset_t *) NULL);
-#endif
+    rpc_dplx_lock_t *lk = &rec->send.lock;
+
+    mutex_lock(&lk->mtx);
+    while (lk->lock_flag_value != rpc_flag_clear)
+        cond_wait(&lk->cv, &lk->mtx);
+    mutex_unlock(&lk->mtx);
 }
 
-static inline void vc_fd_wait_impl(struct rpc_dplx_rec *rec, uint32_t wait_for)
+/* swc: send wait clnt */ 
+static inline void
+rpc_dplx_swc(CLIENT *clnt, uint32_t wait_for)
 {
-    mutex_lock(&rec->mtx);
-    while (rec->lock_flag_value != rpc_flag_clear)
-        cond_wait(&rec->cv, &rec->mtx);
-    mutex_unlock(&rec->mtx);
+    struct cx_data *cx = (struct cx_data *) clnt->cl_private;
+    rpc_dplx_init_client(clnt);
+    rpc_dplx_swi(cx->cx_rec, wait_for);
 }
 
-static inline void vc_fd_signal_impl(struct rpc_dplx_rec *rec, uint32_t flags)
+/* rwi:  recv wait impl */
+static inline void
+rpc_dplx_rwi(struct rpc_dplx_rec *rec, uint32_t wait_for)
 {
+    rpc_dplx_lock_t *lk = &rec->recv.lock;
+
+    mutex_lock(&lk->mtx);
+    while (lk->lock_flag_value != rpc_flag_clear)
+        cond_wait(&lk->cv, &lk->mtx);
+    mutex_unlock(&lk->mtx);
+}
+
+/* rwc: recv wait clnt */ 
+static inline void
+rpc_dplx_rwc(CLIENT *clnt, uint32_t wait_for)
+{
+    struct cx_data *cx = (struct cx_data *) clnt->cl_private;
+    rpc_dplx_init_client(clnt);
+    rpc_dplx_rwi(cx->cx_rec, wait_for);
+}
+
+/* ssi: send signal impl */
+static inline void
+rpc_dplx_ssi(struct rpc_dplx_rec *rec, uint32_t flags)
+{
+    rpc_dplx_lock_t *lk = &rec->send.lock;
+
     if (flags & RPC_DPLX_FLAG_LOCK)
-        mutex_lock(&rec->mtx);
-    cond_signal(&rec->cv);
+        mutex_lock(&lk->mtx);
+    cond_signal(&lk->cv);
     if (flags & RPC_DPLX_FLAG_LOCK)
-        mutex_unlock(&rec->mtx);
+        mutex_unlock(&lk->mtx);
 }
 
-#define vc_fd_lock_c(cl, mask) \
-    vc_fd_lock_c_impl(cl, mask, __FILE__, __LINE__)
-
-static inline void vc_fd_lock_c_impl(CLIENT *cl, sigset_t *mask,
-                                     const char *file, int line)
+/* ssc: send signal clnt */
+static inline void
+rpc_dplx_ssc(CLIENT *clnt, uint32_t flags)
 {
-    struct cx_data *cx = (struct cx_data *) cl->cl_private;
+    struct cx_data *cx = (struct cx_data *) clnt->cl_private;
 
-    rpc_dplx_init_client(cl);
-    vc_fd_lock_impl(cx->cx_rec, mask, file, line);
+    rpc_dplx_init_client(clnt);
+    rpc_dplx_ssi(cx->cx_rec, flags);
 }
 
-static inline void vc_fd_unlock_c(CLIENT *cl, sigset_t *mask)
-{
-    struct cx_data *cx = (struct cx_data *) cl->cl_private;
+/* swf: send wait fd */
+#define rpc_dplx_swf(fd, wait_for) \
+    do { \
+        struct vc_fd_rec *rec = rpc_dplx_lookup_rec(fd); \
+        rpc_dplx_swi(rec, wait_for); \
+    } while (0);
 
-    /* barring lock order violation, cl is lock-initialized */
-    vc_fd_unlock_impl(cx->cx_rec, mask);
-}
+/* rwf: recv wait fd */
+#define rpc_dplx_rwf(fd, wait_for) \
+    do { \
+        struct vc_fd_rec *rec = rpc_dplx_lookup_rec(fd); \
+        rpc_dplx_rwi(rec, wait_for); \
+    } while (0);
 
-void vc_fd_wait(int fd, uint32_t wait_for);
+/* ssf: send signal fd */
+#define rpc_dplx_ssf(fd, flags) \
+    do { \
+        struct vc_fd_rec *rec = rpc_dplx_lookup_rec(fd); \
+        rpc_dplx_ssi(rec, flags); \
+    } while (0);
 
-static inline void vc_fd_wait_c(CLIENT *cl, uint32_t wait_for)
-{
-    struct cx_data *cx = (struct cx_data *) cl->cl_private;
+/* rsf: send signal fd */
+#define rpc_dplx_rsf(fd, flags) \
+    do { \
+        struct vc_fd_rec *rec = rpc_dplx_lookup_rec(fd); \
+        rpc_dplx_rsi(rec, flags); \
+    } while (0);
 
-    rpc_dplx_init_client(cl);
-    vc_fd_wait_impl(cx->cx_rec, wait_for);
-}
-
-void vc_fd_signal(int fd, uint32_t flags);
-
-static inline void vc_fd_signal_c(CLIENT *cl, uint32_t flags)
-{
-    struct cx_data *cx = (struct cx_data *) cl->cl_private;
-
-    rpc_dplx_init_client(cl);
-    vc_fd_signal_impl(cx->cx_rec, flags);
-}
-
-static inline void vc_fd_lock_x(SVCXPRT *xprt, sigset_t *mask,
-                                const char *file, int line)
-{ 
-    vc_lock_init_xprt(xprt);
-    vc_fd_lock_impl((struct rpc_dplx_rec *) xprt->xp_p5, mask, file, line);
-}
-
-static inline void vc_fd_unlock_x(SVCXPRT *xprt, sigset_t *mask)
-{
-    vc_lock_init_xprt(xprt);
-    vc_fd_unlock_impl((struct rpc_dplx_rec *) xprt->xp_p5, mask);
-}
-
-static inline void rpc_dplx_unref_clnt(CLIENT *cl)
+static inline void
+rpc_dplx_unref_clnt(CLIENT *clnt)
 {
     int32_t refcnt __attribute__((unused)) = 0;
-    struct cx_data *cx = (struct cx_data *) cl->cl_private;
+    struct cx_data *cx = (struct cx_data *) clnt->cl_private;
 
     if (cx->cx_rec) {
         refcnt = rpc_dplx_unref(cx->cx_rec, RPC_DPLX_FLAG_NONE);
@@ -217,7 +194,8 @@ static inline void rpc_dplx_unref_clnt(CLIENT *cl)
     }
 }
 
-static inline void rpc_dplx_unref_xprt(SVCXPRT *xprt)
+static inline void
+rpc_dplx_unref_xprt(SVCXPRT *xprt)
 {
     int32_t refcnt __attribute__((unused)) = 0;
 

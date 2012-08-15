@@ -26,20 +26,71 @@
 #ifndef RPC_DPLX_H
 #define RPC_DPLX_H
 
-#define rpc_dplx_send_lock(xprt, mask) \
-    rpc_dplx_send_lock_impl(xprt, mask, __FILE__, __LINE__)
+/* SVCXPRT variants */
 
-void rpc_dplx_send_lock_impl(SVCXPRT *xprt, sigset_t *mask,
-                             const char *file, int line);
+/* slx: send lock xprt */
+#define rpc_dplx_slx(xprt, mask) \
+    rpc_dplx_slxi(xprt, mask, __FILE__, __LINE__)
 
-void rpc_dplx_send_unlock(SVCXPRT *xprt, sigset_t *mask);
+/* slxi: send lock xprt impl */
+void rpc_dplx_slxi(SVCXPRT *xprt, sigset_t *mask, const char *file, int line);
 
-#define rpc_dplx_recv_lock(xprt, mask) \
-    rpc_dplx_recv_lock_impl(xprt, mask, __FILE__, __LINE__)
+/* sux: send unlock xprt */
+void rpc_dplx_sux(SVCXPRT *xprt, sigset_t *mask);
 
-void rpc_dplx_recv_lock_impl(SVCXPRT *xprt, sigset_t *mask,
-                             const char *file, int line);
+/* rlx: recv lock xprt */
+#define rpc_dplx_rlx(xprt, mask) \
+    rpc_dplx_rlxi(xprt, mask, __FILE__, __LINE__)
 
-void rpc_dplx_recv_unlock(SVCXPRT *xprt, sigset_t *mask);
+/* rlxi: recv lock xprt impl */
+void rpc_dplx_rlxi(SVCXPRT *xprt, sigset_t *mask, const char *file, int line);
+
+/* rux: recv unlock xprt */
+void rpc_dplx_rux(SVCXPRT *xprt, sigset_t *mask);
+
+/* CLIENT variants */
+
+/* slc: send lock clnt */
+#define rpc_dplx_slc(clnt, mask) \
+    rpc_dplx_slci(clnt, mask, __FILE__, __LINE__)
+
+/* slci: send lock clnt impl */
+void rpc_dplx_slci(CLIENT *clnt, sigset_t *mask, const char *file, int line);
+
+/* suc: send unlock clnt */
+void rpc_dplx_suc(CLIENT *clnt, sigset_t *mask);
+
+/* rlc: recv lock clnt */
+#define rpc_dplx_rlc(clnt, mask) \
+    rpc_dplx_rlci(clnt, mask, __FILE__, __LINE__)
+
+/* rlci: recv lock clnt impl */
+void rpc_dplx_rlci(CLIENT *clnt, sigset_t *mask, const char *file, int line);
+
+/* ruc: recv unlock clnt */
+void rpc_dplx_ruc(CLIENT *client, sigset_t *mask);
+
+/* fd variants--these interfaces should be used only when NO OTHER
+ * APPROACH COULD WORK.  Please. */
+
+/* slf: send lock fd */
+#define rpc_dplx_slf(fd, mask) \
+    rpc_dplx_slfi(fd, mask, __FILE__, __LINE__)
+
+/* slfi: send lock fd impl */
+void rpc_dplx_slfi(int fd, sigset_t *mask, const char *file, int line);
+
+/* suf: send unlock fd */
+void rpc_dplx_suf(int fd, sigset_t *mask);
+
+/* rlf: recv lock fd */
+#define rpc_dplx_rlf(fd, mask) \
+    rpc_dplx_rlfi(fd, mask, __FILE__, __LINE__)
+
+/* rlfi: recv lock fd impl */
+void rpc_dplx_rlfi(int fd, sigset_t *mask, const char *file, int line);
+
+/* ruf: recv unlock fd */
+void rpc_dplx_ruf(int fd, sigset_t *mask);
 
 #endif /* RPC_DPLX_H */
