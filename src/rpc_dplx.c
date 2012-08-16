@@ -366,13 +366,12 @@ rpc_dplx_unref(struct rpc_dplx_rec *rec, u_int flags)
 
     if (rec->refcnt == 0) {
         t = rbtx_partition_of_scalar(&rpc_dplx_rec_set.xt, rec->fd_k);
-        mutex_unlock(&rec->mtx);
+        spin_unlock(&rec->sp);
         rwlock_wrlock(&t->lock);
         nv = opr_rbtree_lookup(&t->t, &rec->node_k);
         if (nv) {
             rec = opr_containerof(nv, struct rpc_dplx_rec, node_k);
-            /* XXXX fixme */
-            mutex_lock(&crec->mtx);
+            spin_lock(&crec->sp);
             if (rec->refcnt == 0) {
                 (void) opr_rbtree_remove(&t->t, &rec->node_k);
                 spin_unlock(&rec->sp);
@@ -384,7 +383,7 @@ rpc_dplx_unref(struct rpc_dplx_rec *rec, u_int flags)
         rwlock_unlock(&t->lock);
     }
 
-    if (rec && (! (flags & VC_LOCK_FLAG_SPIN_LOCKED)))
+    if (rec && (! (flags & RPC_DPLX_FLAG_SPIN_LOCKED)))
         spin_unlock(&rec->sp);
 
     return (refcnt);
