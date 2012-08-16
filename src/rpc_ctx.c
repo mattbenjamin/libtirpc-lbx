@@ -173,7 +173,7 @@ free_rpc_call_ctx(rpc_ctx_t *ctx, uint32_t flags)
     struct rpc_dplx_rec *rec = cx->cx_rec;
 
     spin_lock(&rec->sp);
-    opr_rbtree_remove(&crec->calls.t, &ctx->node_k);
+    opr_rbtree_remove(&rec->calls.t, &ctx->node_k);
     spin_unlock(&rec->sp);
     if (ctx->msg)
         free_rpc_msg(ctx->msg);
