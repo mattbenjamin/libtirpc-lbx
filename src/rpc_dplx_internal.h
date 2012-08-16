@@ -26,6 +26,8 @@
 #ifndef RPC_DPLX_INTERNAL_H
 #define RPC_DPLX_INTERNAL_H
 
+#include <rpc/rpc_dplx.h>
+
 struct rpc_dplx_rec; /* in clnt_internal.h (avoids circular dependency) */
 
 struct rpc_dplx_rec_set
