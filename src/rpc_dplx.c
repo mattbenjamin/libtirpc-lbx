@@ -359,8 +359,8 @@ rpc_dplx_unref(struct rpc_dplx_rec *rec, u_int flags)
     struct opr_rbtree_node *nv;
     int32_t refcnt;
 
-    if (! (flags & VC_LOCK_FLAG_SPIN_LOCKED))
-        spin_lock(&rec->mtx);
+    if (! (flags & RPC_DPLX_FLAG_SPIN_LOCKED))
+        spin_lock(&rec->sp);
 
     refcnt = --(rec->refcnt);
 
@@ -371,7 +371,7 @@ rpc_dplx_unref(struct rpc_dplx_rec *rec, u_int flags)
         nv = opr_rbtree_lookup(&t->t, &rec->node_k);
         if (nv) {
             rec = opr_containerof(nv, struct rpc_dplx_rec, node_k);
-            spin_lock(&crec->sp);
+            spin_lock(&rec->sp);
             if (rec->refcnt == 0) {
                 (void) opr_rbtree_remove(&t->t, &rec->node_k);
                 spin_unlock(&rec->sp);
@@ -393,14 +393,14 @@ void rpc_dplx_shutdown()
 {
     struct rbtree_x_part *t = NULL;
     struct opr_rbtree_node *n;
-    struct vc_fd_rec *rec = NULL;
+    struct rpc_dplx_rec *rec = NULL;
     int p_ix;
 
     cond_init_rpc_dplx();
 
     /* concurrent, restartable iteration over t */
     p_ix = 0;
-    while (p_ix < VC_LOCK_PARTITIONS) {
+    while (p_ix < RPC_DPLX_PARTITIONS) {
         t = &rpc_dplx_rec_set.xt.tree[p_ix];
         rwlock_rdlock(&t->lock); /* t RLOCKED */
         n = opr_rbtree_first(&t->t);
@@ -417,7 +417,7 @@ void rpc_dplx_shutdown()
 
     /* free tree */
     mem_free(rpc_dplx_rec_set.xt.tree,
-             VC_LOCK_PARTITIONS*sizeof(struct rbtree_x_part));
+             RPC_DPLX_PARTITIONS*sizeof(struct rbtree_x_part));
 
     /* set initialized = FALSE? */
 }
