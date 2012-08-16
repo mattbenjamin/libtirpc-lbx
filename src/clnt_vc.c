@@ -603,16 +603,16 @@ clnt_vc_freeres(CLIENT *cl, xdrproc_t xdr_res, void *res_ptr)
     sigfillset(&newmask);
     thr_sigsetmask(SIG_SETMASK, &newmask, &mask);
 
-    /* XXXX which channel should we wait (the other side signal) on? */
-    /* XXXX looks strongly as if this is a client-only private cv, not
-     * a chanel lock */
-    vc_fd_wait_c(cl, rpc_flag_clear);
+    /* barrier recv channel */
+    rpc_dplx_rwc(cl, rpc_flag_clear);
 
     xdrs->x_op = XDR_FREE;
     dummy = (*xdr_res)(xdrs, res_ptr);
 
     thr_sigsetmask(SIG_SETMASK, &(mask), NULL);
-    vc_fd_signal_c(cl, VC_LOCK_FLAG_NONE);
+
+    /* signal recv channel */
+    rpc_dplx_rsc(cl, RPC_DPLX_FLAG_NONE);
 
     return dummy;
 }
