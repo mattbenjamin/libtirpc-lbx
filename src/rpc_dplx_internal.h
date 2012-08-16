@@ -54,6 +54,21 @@ extern size_t strlcpy(char *dst, const char *src, size_t siz);
 
 struct rpc_dplx_rec *rpc_dplx_lookup_rec(int fd);
 
+static inline void
+rpc_dplx_lock_init(struct rpc_dplx_lock *lock)
+{
+    lock->lock_flag_value = 0;
+    mutex_init(&lock->we.mtx, NULL);
+    cond_init(&lock->we.cv, 0, NULL);
+}
+
+static inline void
+rpc_dplx_lock_destroy(struct rpc_dplx_lock *lock)
+{
+    mutex_destroy(&lock->we.mtx);
+    cond_destroy(&lock->we.cv);
+}
+
 static inline
 void rpc_dplx_init_client(CLIENT *cl)
 {

@@ -75,7 +75,7 @@
 #define spin_lock(l)            pthread_spin_lock(l)
 #define spin_trylock(l)         pthread_spin_trylock(l)
 #define spin_unlock(l)          pthread_spin_unlock(l)
-#define spin_destory(l)         pthread_spin_destroy(l)
+#define spin_destroy(l)         pthread_spin_destroy(l)
 
 #define thr_keycreate(k, d)	pthread_key_create(k, d)
 #define thr_setspecific(k, p)	pthread_setspecific(k, p)
