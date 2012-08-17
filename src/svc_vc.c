@@ -437,7 +437,7 @@ makefd_xprt(int fd, u_int sendsz, u_int recvsz)
         goto done;
     }
     memset(xprt, 0, sizeof *xprt);
-    spin_init(&xprt->xp_sp, NULL);
+    mutex_init(&xprt->xp_lock, NULL);
     cd = mem_alloc(sizeof(struct cf_conn));
     if (cd == NULL) {
         __warnx(TIRPC_DEBUG_FLAG_SVC_VC,
@@ -1309,7 +1309,7 @@ static void svc_clean_idle2_func(SVCXPRT *xprt, void *arg)
 
     if (TRUE) { /* flag in __svc_params->ev_u.epoll? */
 
-        spin_lock(&xprt->xp_sp);
+        mutex_lock(&xprt->xp_lock);
 
         if (xprt == NULL || xprt->xp_ops == NULL ||
             xprt->xp_ops->xp_recv != svc_vc_recv)
@@ -1329,7 +1329,7 @@ static void svc_clean_idle2_func(SVCXPRT *xprt, void *arg)
         }
         if (acc->tv.tv_sec - cd->last_recv_time.tv_sec > acc->timeout) {
             /* XXX locking */
-            spin_unlock(&xprt->xp_sp);
+            mutex_unlock(&xprt->xp_lock);
             (void) svc_rqst_xprt_unregister(xprt, SVC_RQST_FLAG_NONE);
             SVC_DESTROY(xprt);
             acc->ncleaned++;
@@ -1337,7 +1337,7 @@ static void svc_clean_idle2_func(SVCXPRT *xprt, void *arg)
         }
 
     unlock:
-        spin_unlock(&xprt->xp_sp);
+        mutex_unlock(&xprt->xp_lock);
     } /* TRUE */
 out:
     return;
@@ -1391,7 +1391,7 @@ clnt_vc_create_from_svc(SVCXPRT *xprt,
     struct cf_conn *cd;
     CLIENT *cl;
 
-    spin_lock(&xprt->xp_sp);
+    mutex_lock(&xprt->xp_lock);
 
     /* XXX return allocated client structure, or allocate one if none
      * is currently allocated (it can be destroyed) */
@@ -1399,10 +1399,8 @@ clnt_vc_create_from_svc(SVCXPRT *xprt,
         cl = (CLIENT *) xprt->xp_p4;
         goto unlock;
     }
-    xprt->xp_p4 = (void *) 0x1; /* barrier */
-    cd = (struct cf_conn *) xprt->xp_p1;
 
-    spin_unlock(&xprt->xp_sp);
+    cd = (struct cf_conn *) xprt->xp_p1;
 
     /* Create a client transport handle.  The endpoint is already
      * connected. */
@@ -1416,8 +1414,6 @@ clnt_vc_create_from_svc(SVCXPRT *xprt,
     if (! cl)
         goto fail; /* XXX should probably warn here */
 
-    spin_lock(&xprt->xp_sp);
-
     if (flags & SVC_VC_CREATE_FLAG_DPLX) {
         __warnx(TIRPC_DEBUG_FLAG_SVC_VC,
                 "%s:  disposing--calls SetDuplex\n", __func__);
@@ -1428,7 +1424,7 @@ clnt_vc_create_from_svc(SVCXPRT *xprt,
     xprt->xp_flags |= SVC_XPRT_FLAG_DONTCLOSE;
 
 unlock:
-    spin_unlock(&xprt->xp_sp);
+    mutex_unlock(&xprt->xp_lock);
 
 fail:
     /* for a dedicated channel, unregister and free xprt */
