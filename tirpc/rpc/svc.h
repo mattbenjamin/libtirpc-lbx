@@ -236,10 +236,6 @@ typedef struct __rpc_svcxprt {
     struct netbuf xp_ltaddr;  /* local transport address */
     struct netbuf xp_rtaddr;  /* remote transport address */
 
-    /* XXXX duplex fix */
-    struct opaque_auth xp_verf;  /* raw response verifier */
-    SVCAUTH  *xp_auth;  /* auth handle of current req */
-
     /* serialize private data */
     mutex_t         xp_lock;
 
@@ -310,6 +306,10 @@ struct svc_req {
     u_int32_t       rq_xid;         /* xid */
     void            *rq_u1;         /* user data */
     void            *rq_u2;         /* user data */
+
+    /* Moved in N TI-RPC */
+    struct opaque_auth rq_verf; /* raw response verifier */
+    SVCAUTH  *rq_auth; /* auth handle */
 };
 
 /*

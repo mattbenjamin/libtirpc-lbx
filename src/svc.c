@@ -584,7 +584,9 @@ svc_sendreply2(SVCXPRT *xprt, struct svc_req *req,
     rply.rm_reply.rp_stat = MSG_ACCEPTED;
     rply.rm_flags = RPC_MSG_FLAG_MT_XID;
     rply.rm_xid = req->rq_xid;
-    rply.acpted_rply.ar_verf = xprt->xp_verf;
+
+    rply.acpted_rply.ar_verf = xprt->xp_verf; /* XXXX need rq_verf? */
+
     rply.acpted_rply.ar_stat = SUCCESS;
     rply.acpted_rply.ar_results.where = xdr_location;
     rply.acpted_rply.ar_results.proc = xdr_results;
