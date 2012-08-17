@@ -1172,7 +1172,7 @@ svc_shutdown(u_long flags)
     svc_xprt_shutdown();
 
     /* release fd lock records */
-    vc_lock_shutdown();
+    rpc_dplx_shutdown();
 
     return (code);
 }
