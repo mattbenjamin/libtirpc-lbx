@@ -241,7 +241,7 @@ typedef struct __rpc_svcxprt {
     SVCAUTH  *xp_auth;  /* auth handle of current req */
 
     /* serialize private data */
-    mutex_t         xp_lock;
+    spinlock_t         xp_sp;
 
     void            *xp_ev;          /* event handle */
     void  *xp_p1;   /* private: for use by svc ops */
