@@ -178,6 +178,31 @@ rpc_dplx_ssc(CLIENT *clnt, uint32_t flags)
         rpc_dplx_swi(rec, wait_for); \
     } while (0);
 
+
+/* rsi: recv signal impl */
+static inline void
+rpc_dplx_rsi(struct rpc_dplx_rec *rec, uint32_t flags)
+{
+    rpc_dplx_lock_t *lk = &rec->recv.lock;
+
+    if (flags & RPC_DPLX_FLAG_LOCK)
+        mutex_lock(&lk->we.mtx);
+    cond_signal(&lk->we.cv);
+    if (flags & RPC_DPLX_FLAG_LOCK)
+        mutex_unlock(&lk->we.mtx);
+}
+
+/* rsc: recv signal clnt */
+static inline void
+rpc_dplx_rsc(CLIENT *clnt, uint32_t flags)
+{
+    struct cx_data *cx = (struct cx_data *) clnt->cl_private;
+
+    rpc_dplx_init_client(clnt);
+    rpc_dplx_rsi(cx->cx_rec, flags);
+}
+
+
 /* rwf: recv wait fd */
 #define rpc_dplx_rwf(fd, wait_for) \
     do { \
@@ -223,6 +248,6 @@ rpc_dplx_unref_xprt(SVCXPRT *xprt)
     }
 }
 
-void vc_lock_shutdown();
+void rpc_dplx_shutdown(void);
 
 #endif /* RPC_DPLX_INTERNAL_H */

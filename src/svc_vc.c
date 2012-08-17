@@ -642,7 +642,7 @@ __svc_vc_dodestroy(SVCXPRT *xprt)
 
     svc_vc_dec_nconns();
     svc_rqst_finalize_xprt(xprt);
-    vc_lock_unref_xprt(xprt);
+    rpc_dplx_unref_xprt(xprt);
 
     /* assert: caller has unregistered xprt */
     /* duplex */
