@@ -545,26 +545,6 @@ out:
 /* ******************* REPLY GENERATION ROUTINES  ************ */
 
 /*
- * Send a reply to an rpc request
- */
-bool
-svc_sendreply(SVCXPRT *xprt, xdrproc_t xdr_results, void *xdr_location)
-{
-    struct rpc_msg rply;
-
-    assert (xprt != NULL);
-
-    rply.rm_direction = REPLY;
-    rply.rm_reply.rp_stat = MSG_ACCEPTED;
-    rply.rm_flags = RPC_MSG_FLAG_NONE;
-    rply.acpted_rply.ar_verf = xprt->xp_verf;
-    rply.acpted_rply.ar_stat = SUCCESS;
-    rply.acpted_rply.ar_results.where = xdr_location;
-    rply.acpted_rply.ar_results.proc = xdr_results;
-    return (SVC_REPLY (xprt, &rply));
-}
-
-/*
  * Send a reply to an rpc request (MT-SAFE).
  *
  * XXX Rather than marshal an rpc_msg on the stack, we may
@@ -573,8 +553,8 @@ svc_sendreply(SVCXPRT *xprt, xdrproc_t xdr_results, void *xdr_location)
  *
  */
 bool
-svc_sendreply2(SVCXPRT *xprt, struct svc_req *req,
-               xdrproc_t xdr_results, void *xdr_location)
+svc_sendreply(SVCXPRT *xprt, struct svc_req *req, xdrproc_t xdr_results,
+              void *xdr_location)
 {
     struct rpc_msg rply;
 
@@ -584,9 +564,7 @@ svc_sendreply2(SVCXPRT *xprt, struct svc_req *req,
     rply.rm_reply.rp_stat = MSG_ACCEPTED;
     rply.rm_flags = RPC_MSG_FLAG_MT_XID;
     rply.rm_xid = req->rq_xid;
-
-    rply.acpted_rply.ar_verf = xprt->xp_verf; /* XXXX need rq_verf? */
-
+    rply.acpted_rply.ar_verf = req->rq_verf;
     rply.acpted_rply.ar_stat = SUCCESS;
     rply.acpted_rply.ar_results.where = xdr_location;
     rply.acpted_rply.ar_results.proc = xdr_results;
@@ -594,28 +572,10 @@ svc_sendreply2(SVCXPRT *xprt, struct svc_req *req,
 }
 
 /*
- * No procedure error reply
- */
-void
-svcerr_noproc(SVCXPRT *xprt)
-{
-    struct rpc_msg rply;
-
-    assert (xprt != NULL);
-
-    rply.rm_direction = REPLY;
-    rply.rm_reply.rp_stat = MSG_ACCEPTED;
-    rply.rm_flags = RPC_MSG_FLAG_NONE;
-    rply.acpted_rply.ar_verf = xprt->xp_verf;
-    rply.acpted_rply.ar_stat = PROC_UNAVAIL;
-    SVC_REPLY (xprt, &rply);
-}
-
-/*
  * No procedure error reply (MT-SAFE)
  */
 void
-svcerr_noproc2(SVCXPRT *xprt, struct svc_req *req)
+svcerr_noproc(SVCXPRT *xprt, struct svc_req *req)
 {
     struct rpc_msg rply;
 
@@ -625,26 +585,8 @@ svcerr_noproc2(SVCXPRT *xprt, struct svc_req *req)
     rply.rm_reply.rp_stat = MSG_ACCEPTED;
     rply.rm_flags = RPC_MSG_FLAG_MT_XID;
     rply.rm_xid = req->rq_xid;
-    rply.acpted_rply.ar_verf = xprt->xp_verf;
+    rply.acpted_rply.ar_verf = req->rq_verf;
     rply.acpted_rply.ar_stat = PROC_UNAVAIL;
-    SVC_REPLY (xprt, &rply);
-}
-
-/*
- * Can't decode args error reply
- */
-void
-svcerr_decode(SVCXPRT *xprt)
-{
-    struct rpc_msg rply;
-
-    assert (xprt != NULL);
-
-    rply.rm_direction = REPLY;
-    rply.rm_reply.rp_stat = MSG_ACCEPTED;
-    rply.rm_flags = RPC_MSG_FLAG_NONE;
-    rply.acpted_rply.ar_verf = xprt->xp_verf;
-    rply.acpted_rply.ar_stat = GARBAGE_ARGS;
     SVC_REPLY (xprt, &rply);
 }
 
@@ -652,7 +594,7 @@ svcerr_decode(SVCXPRT *xprt)
  * Can't decode args error reply (MT-SAFE)
  */
 void
-svcerr_decode2(SVCXPRT *xprt, struct svc_req *req)
+svcerr_decode(SVCXPRT *xprt, struct svc_req *req)
 {
     struct rpc_msg rply;
 
@@ -662,26 +604,8 @@ svcerr_decode2(SVCXPRT *xprt, struct svc_req *req)
     rply.rm_reply.rp_stat = MSG_ACCEPTED;
     rply.rm_flags = RPC_MSG_FLAG_MT_XID;
     rply.rm_xid = req->rq_xid;
-    rply.acpted_rply.ar_verf = xprt->xp_verf;
+    rply.acpted_rply.ar_verf = req->rq_verf;
     rply.acpted_rply.ar_stat = GARBAGE_ARGS;
-    SVC_REPLY (xprt, &rply);
-}
-
-/*
- * Some system error
- */
-void
-svcerr_systemerr(SVCXPRT *xprt)
-{
-    struct rpc_msg rply;
-
-    assert (xprt != NULL);
-
-    rply.rm_direction = REPLY;
-    rply.rm_reply.rp_stat = MSG_ACCEPTED;
-    rply.rm_flags = RPC_MSG_FLAG_NONE;
-    rply.acpted_rply.ar_verf = xprt->xp_verf;
-    rply.acpted_rply.ar_stat = SYSTEM_ERR;
     SVC_REPLY (xprt, &rply);
 }
 
@@ -689,7 +613,7 @@ svcerr_systemerr(SVCXPRT *xprt)
  * Some system error (MT-SAFE)
  */
 void
-svcerr_systemerr2(SVCXPRT *xprt, struct svc_req *req)
+svcerr_systemerr(SVCXPRT *xprt, struct svc_req *req)
 {
     struct rpc_msg rply;
 
@@ -699,7 +623,7 @@ svcerr_systemerr2(SVCXPRT *xprt, struct svc_req *req)
     rply.rm_reply.rp_stat = MSG_ACCEPTED;
     rply.rm_flags = RPC_MSG_FLAG_MT_XID;
     rply.rm_xid = req->rq_xid;
-    rply.acpted_rply.ar_verf = xprt->xp_verf;
+    rply.acpted_rply.ar_verf = req->rq_verf;
     rply.acpted_rply.ar_stat = SYSTEM_ERR;
     SVC_REPLY (xprt, &rply);
 }
@@ -747,28 +671,10 @@ __svc_versquiet_get (xprt)
 #endif
 
 /*
- * Authentication error reply
- */
-void
-svcerr_auth(SVCXPRT *xprt, enum auth_stat why)
-{
-    struct rpc_msg rply;
-
-    assert (xprt != NULL);
-
-    rply.rm_direction = REPLY;
-    rply.rm_reply.rp_stat = MSG_DENIED;
-    rply.rm_flags = RPC_MSG_FLAG_NONE;
-    rply.rjcted_rply.rj_stat = AUTH_ERROR;
-    rply.rjcted_rply.rj_why = why;
-    SVC_REPLY (xprt, &rply);
-}
-
-/*
  * Authentication error reply (MT-SAFE)
  */
 void
-svcerr_auth2(SVCXPRT *xprt, struct svc_req *req, enum auth_stat why)
+svcerr_auth(SVCXPRT *xprt, struct svc_req *req, enum auth_stat why)
 {
     struct rpc_msg rply;
 
@@ -784,21 +690,10 @@ svcerr_auth2(SVCXPRT *xprt, struct svc_req *req, enum auth_stat why)
 }
 
 /*
- * Auth too weak error reply
- */
-void
-svcerr_weakauth (SVCXPRT *xprt)
-{
-    assert (xprt != NULL);
-
-    svcerr_auth (xprt, AUTH_TOOWEAK);
-}
-
-/*
  * Auth too weak error reply (MT-SAFE)
  */
 void
-svcerr_weakauth2(SVCXPRT *xprt, struct svc_req *req)
+svcerr_weakauth(SVCXPRT *xprt, struct svc_req *req)
 {
     assert(xprt != NULL);
 
@@ -806,28 +701,10 @@ svcerr_weakauth2(SVCXPRT *xprt, struct svc_req *req)
 }
 
 /*
- * Program unavailable error reply
- */
-void
-svcerr_noprog(SVCXPRT *xprt)
-{
-    struct rpc_msg rply;
-
-    assert (xprt != NULL);
-
-    rply.rm_direction = REPLY;
-    rply.rm_reply.rp_stat = MSG_ACCEPTED;
-    rply.rm_flags = RPC_MSG_FLAG_NONE;
-    rply.acpted_rply.ar_verf = xprt->xp_verf;
-    rply.acpted_rply.ar_stat = PROG_UNAVAIL;
-    SVC_REPLY (xprt, &rply);
-}
-
-/*
  * Program unavailable error reply (MT-SAFE)
  */
 void
-svcerr_noprog2(SVCXPRT *xprt, struct svc_req *req)
+svcerr_noprog(SVCXPRT *xprt, struct svc_req *req)
 {
     struct rpc_msg rply;
 
@@ -837,7 +714,7 @@ svcerr_noprog2(SVCXPRT *xprt, struct svc_req *req)
     rply.rm_reply.rp_stat = MSG_ACCEPTED;
     rply.rm_flags = RPC_MSG_FLAG_MT_XID;
     rply.rm_xid = req->rq_xid;
-    rply.acpted_rply.ar_verf = xprt->xp_verf;
+    rply.acpted_rply.ar_verf = req->rq_verf;
     rply.acpted_rply.ar_stat = PROG_UNAVAIL;
     SVC_REPLY (xprt, &rply);
 }
@@ -846,8 +723,7 @@ svcerr_noprog2(SVCXPRT *xprt, struct svc_req *req)
  * Program version mismatch error reply
  */
 void
-svcerr_progvers(SVCXPRT *xprt,
-                rpcvers_t low_vers,
+svcerr_progvers(SVCXPRT *xprt, struct svc_req *req, rpcvers_t low_vers,
                 rpcvers_t high_vers)
 {
     struct rpc_msg rply;
@@ -856,30 +732,9 @@ svcerr_progvers(SVCXPRT *xprt,
 
     rply.rm_direction = REPLY;
     rply.rm_reply.rp_stat = MSG_ACCEPTED;
-    rply.rm_flags = RPC_MSG_FLAG_NONE;
-    rply.acpted_rply.ar_verf = xprt->xp_verf;
-    rply.acpted_rply.ar_stat = PROG_MISMATCH;
-    rply.acpted_rply.ar_vers.low = (u_int32_t) low_vers;
-    rply.acpted_rply.ar_vers.high = (u_int32_t) high_vers;
-    SVC_REPLY (xprt, &rply);
-}
-
-/*
- * Program version mismatch error reply
- */
-void
-svcerr_progvers2(SVCXPRT *xprt, struct svc_req *req, rpcvers_t low_vers,
-                 rpcvers_t high_vers)
-{
-    struct rpc_msg rply;
-
-    assert (xprt != NULL);
-
-    rply.rm_direction = REPLY;
-    rply.rm_reply.rp_stat = MSG_ACCEPTED;
     rply.rm_flags = RPC_MSG_FLAG_MT_XID;
     rply.rm_xid = req->rq_xid;
-    rply.acpted_rply.ar_verf = xprt->xp_verf;
+    rply.acpted_rply.ar_verf = req->rq_verf;
     rply.acpted_rply.ar_stat = PROG_MISMATCH;
     rply.acpted_rply.ar_vers.low = (u_int32_t) low_vers;
     rply.acpted_rply.ar_vers.high = (u_int32_t) high_vers;

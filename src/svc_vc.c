@@ -204,7 +204,10 @@ svc_vc_create2(int fd, u_int sendsize, u_int recvsize, u_int flags)
     }
     xprt->xp_flags = SVC_XPRT_FLAG_NONE;
     xprt->xp_p1 = r;
+#warning XXX fixme /* XXX check and or fixme */
+#if 0
     xprt->xp_verf = _null_auth;
+#endif
     svc_vc_rendezvous_ops(xprt);
     xprt->xp_fd = fd;
     svc_rqst_init_xprt(xprt);
@@ -438,6 +441,7 @@ makefd_xprt(int fd, u_int sendsz, u_int recvsz)
     }
     memset(xprt, 0, sizeof *xprt);
     mutex_init(&xprt->xp_lock, NULL);
+    mutex_init(&xprt->xp_auth_lock, NULL);
     cd = mem_alloc(sizeof(struct cf_conn));
     if (cd == NULL) {
         __warnx(TIRPC_DEBUG_FLAG_SVC_VC,
@@ -471,7 +475,10 @@ makefd_xprt(int fd, u_int sendsz, u_int recvsz)
 #endif
 
     xprt->xp_p1 = cd;
+#warning XXX fixme /* XXX check and or fixme */
+#if 0
     xprt->xp_verf.oa_base = cd->verf_body;
+#endif
     xprt->xp_fd = fd;
     if (__rpc_fd2sockinfo(fd, &si) && __rpc_sockinfo2netid(&si, &netid))
         xprt->xp_netid = rpc_strdup(netid);
@@ -1613,7 +1620,10 @@ SVCXPRT *svc_vc_create_xprt(u_long sendsz, u_long recvsz)
 #endif
 
     xprt->xp_p1 = cd;
+#warning XXX fixme /* XXX check and or fixme */
+#if 0
     xprt->xp_verf.oa_base = cd->verf_body;
+#endif
 
 done:
     return (xprt);

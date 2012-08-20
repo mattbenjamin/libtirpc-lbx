@@ -236,6 +236,10 @@ typedef struct __rpc_svcxprt {
     struct netbuf xp_ltaddr;  /* local transport address */
     struct netbuf xp_rtaddr;  /* remote transport address */
 
+    /* auth */
+    mutex_t  xp_auth_lock; /* lock owned by installed authenticator */
+    SVCAUTH  *xp_auth; /* auth handle */
+
     /* serialize private data */
     mutex_t         xp_lock;
 
@@ -501,25 +505,15 @@ __END_DECLS
  */
 
 __BEGIN_DECLS
-extern bool svc_sendreply(SVCXPRT *, xdrproc_t, void *);
-extern bool   svc_sendreply2 (SVCXPRT *, struct svc_req *, xdrproc_t,
-                                void *);
-extern void svcerr_decode(SVCXPRT *);
-extern void svcerr_weakauth(SVCXPRT *);
-extern void svcerr_noproc(SVCXPRT *);
-extern void svcerr_progvers(SVCXPRT *, rpcvers_t, rpcvers_t);
-extern void svcerr_auth(SVCXPRT *, enum auth_stat);
-extern void svcerr_noprog(SVCXPRT *);
-extern void svcerr_systemerr(SVCXPRT *);
 
-extern void svcerr_decode2(SVCXPRT *, struct svc_req *);
-extern void svcerr_weakauth2(SVCXPRT *, struct svc_req *);
-extern void svcerr_noproc2(SVCXPRT *, struct svc_req *);
-extern void svcerr_progvers2(SVCXPRT *, struct svc_req *, rpcvers_t,
-                             rpcvers_t);
-extern void svcerr_auth2(SVCXPRT *, struct svc_req *, enum auth_stat);
-extern void svcerr_noprog2(SVCXPRT *, struct svc_req *);
-extern void svcerr_systemerr2(SVCXPRT *, struct svc_req *);
+extern bool svc_sendreply(SVCXPRT *, struct svc_req *, xdrproc_t, void *);
+extern void svcerr_decode(SVCXPRT *, struct svc_req *);
+extern void svcerr_weakauth(SVCXPRT *, struct svc_req *);
+extern void svcerr_noproc(SVCXPRT *, struct svc_req *);
+extern void svcerr_progvers(SVCXPRT *, struct svc_req *, rpcvers_t, rpcvers_t);
+extern void svcerr_auth(SVCXPRT *, struct svc_req *, enum auth_stat);
+extern void svcerr_noprog(SVCXPRT *, struct svc_req *);
+extern void svcerr_systemerr(SVCXPRT *, struct svc_req *);
 
 extern int rpc_reg(rpcprog_t, rpcvers_t, rpcproc_t,
                    char *(*)(char *), xdrproc_t, xdrproc_t,

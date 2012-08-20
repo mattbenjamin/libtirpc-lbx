@@ -133,6 +133,10 @@ svc_dg_create(int fd, u_int sendsize, u_int recvsize)
         goto freedata;
     memset(xprt, 0, sizeof (SVCXPRT));
 
+    /* Init SVCXPRT locks, etc */
+    mutex_init(&xprt->xp_lock, NULL);
+    mutex_init(&xprt->xp_auth_lock, NULL);
+
     su = mem_alloc(sizeof (*su));
     if (su == NULL)
         goto freedata;
@@ -147,7 +151,10 @@ svc_dg_create(int fd, u_int sendsize, u_int recvsize)
     xprt->xp_fd = fd;
     xprt->xp_p2 = su;
     xprt->xp_auth = NULL;
+#warning XXX fixme /* XXX check and or fixme */
+#if 0
     xprt->xp_verf.oa_base = su->su_verfbody;
+#endif
     svc_dg_ops(xprt);
     xprt->xp_rtaddr.maxlen = sizeof (struct sockaddr_storage);
 
