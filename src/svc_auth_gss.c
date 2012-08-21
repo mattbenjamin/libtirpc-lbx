@@ -39,22 +39,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <rpc/rpc.h>
-#include <gssapi/gssapi.h>
-
 #include "rpc_com.h"
-
-extern SVCAUTH svc_auth_none;
-
-/*
- * from mit-krb5-1.2.1 mechglue/mglueP.h:
- * Array of context IDs typed by mechanism OID
- */
-typedef struct gss_union_ctx_id_t {
-    gss_OID     mech_type;
-    gss_ctx_id_t    internal_ctx_id;
-} gss_union_ctx_id_desc, *gss_union_ctx_id_t;
-
-
+#include "gss_internal.h"
 
 static bool svcauth_gss_destroy(SVCAUTH *auth);
 static bool svcauth_gss_wrap(SVCAUTH *auth, XDR *xdrs, xdrproc_t xdr_func,
@@ -68,92 +54,75 @@ struct svc_auth_ops svc_auth_gss_ops = {
     svcauth_gss_destroy
 };
 
-struct svc_rpc_gss_data {
-    bool   established; /* context established */
-    gss_ctx_id_t  ctx;  /* context id */
-    struct rpc_gss_sec sec;  /* security triple */
-    gss_buffer_desc  cname;  /* GSS client name */
-    u_int   seq;  /* sequence number */
-    u_int   win;  /* sequence window */
-    u_int   seqlast; /* last sequence number */
-    u_int32_t  seqmask; /* bitmask of seqnums */
-    gss_name_t  client_name; /* unparsed name string */
-};
-
-#define SVCAUTH_PRIVATE(auth)                           \
+#define SVCAUTH_PRIVATE(auth) \
     ((struct svc_rpc_gss_data *)(auth)->svc_ah_private)
 
 /* Global server credentials. */
-gss_cred_id_t  _svcauth_gss_creds;
-static gss_name_t _svcauth_gss_name = NULL;
+gss_cred_id_t svcauth_gss_creds;
+static gss_name_t svcauth_gss_name = NULL;
 
 bool
 svcauth_gss_set_svc_name(gss_name_t name)
 {
     OM_uint32 maj_stat, min_stat;
 
-    log_debug("in svcauth_gss_set_svc_name()");
-
-    if (_svcauth_gss_name != NULL) {
-        maj_stat = gss_release_name(&min_stat, &_svcauth_gss_name);
-
-        if (maj_stat != GSS_S_COMPLETE) {
-            log_status("gss_release_name", maj_stat, min_stat);
+    if (svcauth_gss_name != NULL) {
+        maj_stat = gss_release_name(&min_stat, &svcauth_gss_name);
+        if (maj_stat != GSS_S_COMPLETE)
             return (FALSE);
-        }
-        _svcauth_gss_name = NULL;
+        svcauth_gss_name = NULL;
     }
-    maj_stat = gss_duplicate_name(&min_stat, name, &_svcauth_gss_name);
 
-    if (maj_stat != GSS_S_COMPLETE) {
-        log_status("gss_duplicate_name", maj_stat, min_stat);
+    /* XXX Ganesha */
+    if(svcauth_gss_name == GSS_C_NO_NAME)
+        return (TRUE);
+
+    maj_stat = gss_duplicate_name(&min_stat, name, &svcauth_gss_name);
+    if (maj_stat != GSS_S_COMPLETE)
         return (FALSE);
-    }
 
     return (TRUE);
 }
 
-static bool
+bool
 svcauth_gss_import_name(char *service)
 {
     gss_name_t name;
     gss_buffer_desc namebuf;
     OM_uint32 maj_stat, min_stat;
 
-    log_debug("in svcauth_gss_import_name()");
-
     namebuf.value = service;
     namebuf.length = strlen(service);
 
     maj_stat = gss_import_name(&min_stat, &namebuf,
                                (gss_OID)GSS_C_NT_HOSTBASED_SERVICE, &name);
-
-    if (maj_stat != GSS_S_COMPLETE) {
-        log_status("gss_import_name", maj_stat, min_stat);
+    if (maj_stat != GSS_S_COMPLETE)
         return (FALSE);
-    }
+
     if (svcauth_gss_set_svc_name(name) != TRUE) {
         gss_release_name(&min_stat, &name);
         return (FALSE);
     }
-    return (TRUE);
+
+  /* discard duplicate name */
+  gss_release_name(&min_stat, &name);
+
+  return (TRUE);
 }
 
-static bool
+bool
 svcauth_gss_acquire_cred(void)
 {
     OM_uint32 maj_stat, min_stat;
 
-    log_debug("in svcauth_gss_acquire_cred()");
-
-    maj_stat = gss_acquire_cred(&min_stat, _svcauth_gss_name, 0,
+    maj_stat = gss_acquire_cred(&min_stat, 
+                                svcauth_gss_name, 0,
                                 GSS_C_NULL_OID_SET, GSS_C_ACCEPT,
-                                &_svcauth_gss_creds, NULL, NULL);
-
-    if (maj_stat != GSS_S_COMPLETE) {
-        log_status("gss_acquire_cred", maj_stat, min_stat);
+                                &svcauth_gss_creds,
+                                NULL, NULL);
+    if (maj_stat != GSS_S_COMPLETE)
         return (FALSE);
-    }
+
     return (TRUE);
 }
 
@@ -162,19 +131,15 @@ svcauth_gss_release_cred(void)
 {
     OM_uint32 maj_stat, min_stat;
 
-    log_debug("in svcauth_gss_release_cred()");
-
-    maj_stat = gss_release_cred(&min_stat, &_svcauth_gss_creds);
-
-    if (maj_stat != GSS_S_COMPLETE) {
-        log_status("gss_release_cred", maj_stat, min_stat);
+    maj_stat = gss_release_cred(&min_stat, &svcauth_gss_creds);
+    if (maj_stat != GSS_S_COMPLETE)
         return (FALSE);
-    }
-
-    _svcauth_gss_creds = NULL;
+    svcauth_gss_creds = NULL;
 
     return (TRUE);
 }
+
+/* XXXX: clean to here */
 
 static bool
 svcauth_gss_accept_sec_context(struct svc_req *req,

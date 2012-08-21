@@ -43,6 +43,20 @@
 #include <gssapi/gssapi.h>
 #include <gssapi/gssapi_generic.h>
 #endif
+#include <rpc/auth_gss.h>
+
+extern SVCAUTH svc_auth_none;
+
+/*
+ * from mit-krb5-1.2.1 mechglue/mglueP.h:
+ * Array of context IDs typed by mechanism OID
+ */
+typedef struct gss_union_ctx_id_t
+{
+    gss_OID mech_type;
+    gss_ctx_id_t internal_ctx_id;
+} gss_union_ctx_id_desc, *gss_union_ctx_id_t;
+
 
 #define _MSPAC_SUPPORT 1
 
