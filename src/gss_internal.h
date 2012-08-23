@@ -70,11 +70,15 @@ struct mspac_buf
 
 struct svc_rpc_gss_data
 {
-    struct rbtree_x xt; /* rbtree anchor */
+    struct opr_rbtree_node node_k;
+    mutex_t lock;
     u_int refcnt;
+    struct hk {
+        uint64_t k;
+    };
     bool established;
     gss_ctx_id_t ctx;  /* context id */
-    struct rpc_gss_sec sec;  /* security triple */
+    struct rpc_gss_sec sec; /* security triple */
     gss_buffer_desc cname;  /* GSS client name */
     u_int seq;
     u_int win;
@@ -86,5 +90,21 @@ struct svc_rpc_gss_data
     struct mspac_buf pac;
 #endif
 };
+
+static inline struct svc_rpc_gss_data *
+alloc_svc_rpc_gss_data(void)
+{
+    struct svc_rpc_gss_data *gd = mem_zalloc(sizeof(struct svc_rpc_gss_data));
+    mutex_init(&gd->lock, NULL);
+    return (gd);
+}
+
+static inline void
+free_svc_rpc_gss_data(struct svc_rpc_gss_data *gd)
+{
+    mutex_destroy(&gd->lock);
+    mem_free(gd, 0);
+}
+
 
 #endif /* GSS_INTERNAL_H */
