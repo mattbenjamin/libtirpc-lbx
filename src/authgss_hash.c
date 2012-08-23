@@ -165,7 +165,6 @@ bool
 authgss_ctx_hash_del(struct svc_rpc_gss_data *gd)
 {
     struct rbtree_x_part *t;
-    bool rslt;
 
     cond_init_authgss_hash();
 
@@ -174,6 +173,5 @@ authgss_ctx_hash_del(struct svc_rpc_gss_data *gd)
     rbtree_x_cached_remove_wt(&authgss_hash_st.xt,, t,  &gd->node_k, gd->hk.k);
     spin_unlock(&t->sp);
 
-    return (rslt);
-
+    return (TRUE);
 }
