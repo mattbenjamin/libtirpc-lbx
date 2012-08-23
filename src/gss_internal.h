@@ -71,8 +71,10 @@ struct mspac_buf
 struct svc_rpc_gss_data
 {
     struct opr_rbtree_node node_k;
+    TAILQ_ENTRY(struct opr_rbtree_node) lru_q;
     mutex_t lock;
     u_int refcnt;
+    uint64_t gen;
     struct hk {
         uint64_t k;
     };
@@ -96,6 +98,7 @@ alloc_svc_rpc_gss_data(void)
 {
     struct svc_rpc_gss_data *gd = mem_zalloc(sizeof(struct svc_rpc_gss_data));
     mutex_init(&gd->lock, NULL);
+    TAILQ_INIT_ENTRY(gd, lru_q);
     return (gd);
 }
 
