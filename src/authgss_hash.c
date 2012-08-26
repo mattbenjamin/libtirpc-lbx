@@ -34,6 +34,7 @@
 #include "gss_internal.h"
 
 #define AUTHGSS_HASH_PARTIITONS 13
+#define MAX_DELTA_G 1024
 
 /* GSS context cache */
 

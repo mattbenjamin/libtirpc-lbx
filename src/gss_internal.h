@@ -35,6 +35,7 @@
 #include <sys/types.h>
 #include <rpc/rpc.h>
 #include <misc/rbtree_x.h>
+#include <misc/queue.h>
 
 #ifdef HAVE_HEIMDAL
 #include <gssapi.h>
@@ -71,13 +72,13 @@ struct mspac_buf
 struct svc_rpc_gss_data
 {
     struct opr_rbtree_node node_k;
-    TAILQ_ENTRY(struct opr_rbtree_node) lru_q;
+    TAILQ_ENTRY(opr_rbtree_node) lru_q;
     mutex_t lock;
     u_int refcnt;
     uint64_t gen;
-    struct hk {
+    struct {
         uint64_t k;
-    };
+    } hk;
     bool established;
     gss_ctx_id_t ctx;  /* context id */
     struct rpc_gss_sec sec; /* security triple */
@@ -109,5 +110,9 @@ free_svc_rpc_gss_data(struct svc_rpc_gss_data *gd)
     mem_free(gd, 0);
 }
 
+void authgss_hash_init();
+struct svc_rpc_gss_data * authgss_ctx_hash_get(struct rpc_gss_cred *gc);
+bool authgss_ctx_hash_set(struct svc_rpc_gss_data *gd);
+bool authgss_ctx_hash_del(struct svc_rpc_gss_data *gd);
 
 #endif /* GSS_INTERNAL_H */
