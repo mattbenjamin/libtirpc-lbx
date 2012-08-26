@@ -143,17 +143,14 @@ svcauth_gss_release_cred(void)
 
 static bool
 svcauth_gss_accept_sec_context(struct svc_req *req,
+                               struct svc_rpc_gss_data *gd,
                                struct rpc_gss_init_res *gr)
 {
-    struct svc_rpc_gss_data *gd;
     struct rpc_gss_cred *gc;
-    gss_buffer_desc   recv_tok, seqbuf, checksum;
-    gss_OID    mech;
-    OM_uint32   maj_stat = 0, min_stat = 0, ret_flags, seq;
+    gss_buffer_desc recv_tok, seqbuf, checksum;
+    gss_OID mech;
+    OM_uint32 maj_stat = 0, min_stat = 0, ret_flags, seq;
 
-    log_debug("in svcauth_gss_accept_context()");
-
-    gd = SVCAUTH_PRIVATE(req->rq_xprt->xp_auth);
     gc = (struct rpc_gss_cred *)req->rq_clntcred;
     memset(gr, 0, sizeof(*gr));
 
@@ -262,8 +259,6 @@ svcauth_gss_validate(struct svc_req * req, struct svc_rpc_gss_data *gd,
     u_char rpchdr[128];
     int32_t *buf;
 
-    log_debug("in svcauth_gss_validate()");
-
     memset(rpchdr, 0, sizeof(rpchdr));
 
     /* XXX - Reconstruct RPC header for signing (from xdr_callmsg). */
@@ -299,25 +294,20 @@ svcauth_gss_validate(struct svc_req * req, struct svc_rpc_gss_data *gd,
                               &qop_state);
 
     if (maj_stat != GSS_S_COMPLETE) {
-        log_status("gss_verify_mic", maj_stat, min_stat);
+        __warnx(TIRPC_DEBUG_FLAG_AUTH,
+                "%s: %d %d",
+                __func__, maj_stat, min_stat);
         return (FALSE);
     }
     return (TRUE);
 }
 
 bool
-svcauth_gss_nextverf(struct svc_req *req, u_int num)
+svcauth_gss_nextverf(struct svc_req *req, struct svc_rpc_gss_data *gd,
+                     u_int num)
 {
-    struct svc_rpc_gss_data *gd;
-    gss_buffer_desc   signbuf, checksum;
-    OM_uint32   maj_stat, min_stat;
-
-    log_debug("in svcauth_gss_nextverf()");
-
-    if (req->rq_xprt->xp_auth == NULL)
-        return (FALSE);
-
-    gd = SVCAUTH_PRIVATE(req->rq_xprt->xp_auth);
+    gss_buffer_desc signbuf, checksum;
+    OM_uint32 maj_stat, min_stat;
 
     signbuf.value = &num;
     signbuf.length = sizeof(num);
@@ -340,8 +330,6 @@ svcauth_gss_nextverf(struct svc_req *req, u_int num)
     do { \
         if (gc) \
             xdr_free((xdrproc_t)xdr_rpc_gss_cred, gc); \
-        if (xp_auth_locked) \
-            mutex_unlock(&xprt->xp_auth_lock); \
         if (gd_locked) \
             mutex_unlock(&gd->lock); \
         return (code); \
@@ -358,7 +346,6 @@ _svcauth_gss(struct svc_req *req, struct rpc_msg *msg, bool *no_dispatch)
     struct rpc_gss_init_res gr;
     int call_stat, offset;
     OM_uint32 maj_stat, min_stat;
-    bool xp_auth_locked = FALSE;
     bool gd_locked = FALSE;
     bool gd_hashed = FALSE;
 
@@ -413,26 +400,19 @@ _svcauth_gss(struct svc_req *req, struct rpc_msg *msg, bool *no_dispatch)
 
     if (! gd) {
         /* Allocate and set up server auth handle. */
-        mutex_lock(&xprt->xp_auth_lock);
-        xp_auth_locked = TRUE;
-        if (xprt->xp_auth == NULL ||
-            xprt->xp_auth == &svc_auth_none) {
-            if ((auth = mem_alloc(sizeof(SVCAUTH))) == NULL) {
-                __warnx(TIRPC_DEBUG_FLAG_AUTH,
-                        "%s: alloc auth failed", __func__);
-                svcauth_gss_return(AUTH_FAILED);
-            }
-            if ((gd = alloc_svc_rpc_gss_data()) == NULL) {
-                __warnx(TIRPC_DEBUG_FLAG_RPCSEC_GSS,
-                        "%s: alloc svc_rpc_gss_data failed", __func__);
-                svcauth_gss_return(AUTH_FAILED);
-            }
-            auth->svc_ah_ops = &svc_auth_gss_ops;
-            auth->svc_ah_private = (caddr_t) gd;
-            xprt->xp_auth = auth;
+        if ((auth = mem_alloc(sizeof(SVCAUTH))) == NULL) {
+            __warnx(TIRPC_DEBUG_FLAG_AUTH,
+                    "%s: alloc auth failed", __func__);
+            svcauth_gss_return(AUTH_FAILED);
         }
-        mutex_unlock(&xprt->xp_auth_lock);
-        xp_auth_locked = FALSE;
+        if ((gd = alloc_svc_rpc_gss_data()) == NULL) {
+            __warnx(TIRPC_DEBUG_FLAG_RPCSEC_GSS,
+                    "%s: alloc svc_rpc_gss_data failed", __func__);
+            mem_free(auth, sizeof(SVCAUTH));
+            svcauth_gss_return(AUTH_FAILED);
+        }
+        auth->svc_ah_ops = &svc_auth_gss_ops;
+        auth->svc_ah_private = (caddr_t) gd;
     }
 
     /* Serialize context. */
@@ -476,10 +456,10 @@ _svcauth_gss(struct svc_req *req, struct rpc_msg *msg, bool *no_dispatch)
         if (! svcauth_gss_acquire_cred())
             svcauth_gss_return(AUTH_FAILED);
 
-        if (! svcauth_gss_accept_sec_context(req, &gr))
+        if (! svcauth_gss_accept_sec_context(req, gd, &gr))
             svcauth_gss_return(AUTH_REJECTEDCRED);
 
-        if (! svcauth_gss_nextverf(req, htonl(gr.gr_win))) {
+        if (! svcauth_gss_nextverf(req, gd, htonl(gr.gr_win))) {
             /* XXX check */
             gss_release_buffer(&min_stat, &gr.gr_token);
             mem_free(gr.gr_ctx.value, 0);
@@ -511,7 +491,7 @@ _svcauth_gss(struct svc_req *req, struct rpc_msg *msg, bool *no_dispatch)
       if (! svcauth_gss_validate(req, gd, msg))
           svcauth_gss_return(RPCSEC_GSS_CREDPROBLEM);
 
-      if (! svcauth_gss_nextverf(req, htonl(gc->gc_seq)))
+      if (! svcauth_gss_nextverf(req, gd, htonl(gc->gc_seq)))
 	  svcauth_gss_return(AUTH_FAILED);
       break;
 
@@ -522,7 +502,7 @@ _svcauth_gss(struct svc_req *req, struct rpc_msg *msg, bool *no_dispatch)
       if (! svcauth_gss_validate(req, gd, msg))
         svcauth_gss_return(RPCSEC_GSS_CREDPROBLEM);
 
-      if (! svcauth_gss_nextverf(req, htonl(gc->gc_seq)))
+      if (! svcauth_gss_nextverf(req, gd, htonl(gc->gc_seq)))
 	  svcauth_gss_return(AUTH_FAILED);
 
       *no_dispatch = TRUE;
