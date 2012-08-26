@@ -173,9 +173,14 @@ svcauth_gss_accept_sec_context(struct svc_req *req,
                                           NULL,
                                           NULL);
 
-    if (gr->gr_major != GSS_S_COMPLETE &&
-        gr->gr_major != GSS_S_CONTINUE_NEEDED) {
-        log_status("accept_sec_context", gr->gr_major, gr->gr_minor);
+    svc_freeargs(req->rq_xprt, (xdrproc_t)xdr_rpc_gss_init_args,
+                 (caddr_t) & recv_tok);
+
+    if ((gr->gr_major != GSS_S_COMPLETE) &&
+        (gr->gr_major != GSS_S_CONTINUE_NEEDED)) {
+        __warnx(TIRPC_DEBUG_FLAG_AUTH,
+                "%s: auth failed major=%u minor=%u",
+                __func__, gr->gr_major, gr->gr_minor);
         gd->ctx = GSS_C_NO_CONTEXT;
         gss_release_buffer(&min_stat, &gr->gr_token);
         return (FALSE);
@@ -184,16 +189,17 @@ svcauth_gss_accept_sec_context(struct svc_req *req,
      * one to the mechanism oid, one to the internal_ctx_id */
     if ((gr->gr_ctx.value = mem_alloc(sizeof(gss_union_ctx_id_desc))) == NULL) {
         __warnx(TIRPC_DEBUG_FLAG_AUTH,
-                "svcauth_gss_accept_context: out of memory\n");
+                "%s: out of memory", __func__);
+        gss_release_buffer(&min_stat, &gr->gr_token);
         return (FALSE);
     }
     memcpy(gr->gr_ctx.value, gd->ctx, sizeof(gss_union_ctx_id_desc));
     gr->gr_ctx.length = sizeof(gss_union_ctx_id_desc);
 
     /* ANDROS: change for debugging linux kernel version...
-       gr->gr_win = sizeof(gd->seqmask) * 8;
+       gr->gr_win = 0x00000005;
     */
-    gr->gr_win = 0x00000005;
+    gr->gr_win = sizeof(gd->seqmask) * 8;
 
     /* Save client info. */
     gd->sec.mech = mech;
@@ -206,42 +212,48 @@ svcauth_gss_accept_sec_context(struct svc_req *req,
         maj_stat = gss_display_name(&min_stat, gd->client_name,
                                     &gd->cname, &gd->sec.mech);
         if (maj_stat != GSS_S_COMPLETE) {
-            log_status("display_name", maj_stat, min_stat);
+            __warnx(TIRPC_DEBUG_FLAG_AUTH,
+                    "%s: display_name major=%u minor=%u",
+                    __func__, maj_stat, min_stat);
+            gss_release_buffer(&min_stat, &gr->gr_token);
             return (FALSE);
         }
 #ifdef DEBUG
 #ifdef HAVE_KRB5
         {
             gss_buffer_desc mechname;
-
             gss_oid_to_str(&min_stat, mech, &mechname);
-
-            log_debug("accepted context for %.*s with "
+            __warnx(TIRPC_DEBUG_FLAG_AUTH,
+                    "%s: accepted context for %.*s with "
                       "<mech %.*s, qop %d, svc %d>",
-                      gd->cname.length, (char *)gd->cname.value,
-                      mechname.length, (char *)mechname.value,
-                      gd->sec.qop, gd->sec.svc);
-
+                    __func__, gd->cname.length, (char *)gd->cname.value,
+                    mechname.length, (char *)mechname.value,
+                    gd->sec.qop, gd->sec.svc);
             gss_release_buffer(&min_stat, &mechname);
         }
 #elif HAVE_HEIMDAL
-        log_debug("accepted context for %.*s with "
-                  "<mech {}, qop %d, svc %d>",
-                  gd->cname.length, (char *)gd->cname.value,
-                  gd->sec.qop, gd->sec.svc);
+        __warnx(TIRPC_DEBUG_FLAG_AUTH,
+                "%s: accepted context for %.*s with "
+                "<mech {}, qop %d, svc %d>",
+                __func__, gd->cname.length, (char *)gd->cname.value,
+                gd->sec.qop, gd->sec.svc);
 #endif
 #endif /* DEBUG */
         seq = htonl(gr->gr_win);
         seqbuf.value = &seq;
         seqbuf.length = sizeof(seq);
 
+        gss_release_buffer(&min_stat, &gd->checksum);
+
         maj_stat = gss_sign(&min_stat, gd->ctx, GSS_C_QOP_DEFAULT,
                             &seqbuf, &checksum);
 
-        if (maj_stat != GSS_S_COMPLETE)
+        if (maj_stat != GSS_S_COMPLETE) {
+            gss_release_buffer(&min_stat, &gr->gr_token);
             return (FALSE);
+        }
 
-        /* XXX deep copy? ref? */
+        /* XXX ref? (assert gd->locked?) */
         req->rq_verf.oa_flavor = RPCSEC_GSS;
         req->rq_verf.oa_base = checksum.value;
         req->rq_verf.oa_length = checksum.length;
