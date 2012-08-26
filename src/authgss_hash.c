@@ -73,7 +73,7 @@ authgss_hash_init()
 
     code = rbtx_init(&authgss_hash_st.xt, svc_rpc_gss_cmpf,
                      __svc_params->gss.ctx_hash_partitions,
-                     RBT_X_FLAG_ALLOC);
+                     RBT_X_FLAG_ALLOC|RBT_X_FLAG_CACHE_RT);
     if (code)
         __warnx(TIRPC_DEBUG_FLAG_RPCSEC_GSS,
                 "%s: rbtx_init failed", __func__);
@@ -176,8 +176,8 @@ authgss_ctx_hash_set(struct svc_rpc_gss_data *gd)
 
     t = rbtx_partition_of_scalar(&authgss_hash_st.xt, gd->k);
     spin_lock(&t->sp);
-    rslt = rbtree_x_cached_insert_wt(&authgss_hash_st.xt, t, &gd->node_k,
-                                     gd->hk.k);
+    rslt = rbtree_x_cached_insert(&authgss_hash_st.xt, t, &gd->node_k,
+                                  gd->hk.k);
     if (rslt) {
         /* lru adjust */
         axp = (struct authgss_x_part *) t->u1;
@@ -198,7 +198,7 @@ authgss_ctx_hash_del(struct svc_rpc_gss_data *gd)
 
     t = rbtx_partition_of_scalar(&authgss_hash_st.xt, gd->k);
     spin_lock(&t->sp);
-    rbtree_x_cached_remove_wt(&authgss_hash_st.xt, t,  &gd->node_k, gd->hk.k);
+    rbtree_x_cached_remove(&authgss_hash_st.xt, t,  &gd->node_k, gd->hk.k);
     axp = (struct authgss_x_part *) t->u1;
     TAILQ_REMOVE(&axp->lru_q, gd, lru_q);
     spin_unlock(&t->sp);
