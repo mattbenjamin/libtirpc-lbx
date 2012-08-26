@@ -204,7 +204,8 @@ typedef struct __rpc_svcxprt {
         bool (*xp_getargs)(struct __rpc_svcxprt *, xdrproc_t,
                              void *);
         /* send reply */
-        bool (*xp_reply)(struct __rpc_svcxprt *, struct rpc_msg *);
+        bool (*xp_reply)(struct __rpc_svcxprt *, struct svc_req *req,
+                         struct rpc_msg *);
         /* free mem allocated for args */
         bool (*xp_freeargs)(struct __rpc_svcxprt *, xdrproc_t,
                               void *);
@@ -371,10 +372,10 @@ extern SVCXPRT *svc_shim_copy_xprt(SVCXPRT *xprt_copy, SVCXPRT *xprt_orig);
 #define svc_getargs2(xprt, xargs, argsp, u_data)                        \
     (*(xprt)->xp_ops->xp_getargs2)((xprt), (xargs), (argsp), (u_data))
 
-#define SVC_REPLY(xprt, msg)                    \
-    (*(xprt)->xp_ops->xp_reply) ((xprt), (msg))
-#define svc_reply(xprt, msg)                    \
-    (*(xprt)->xp_ops->xp_reply) ((xprt), (msg))
+#define SVC_REPLY(xprt, req, msg) \
+    (*(xprt)->xp_ops->xp_reply) ((xprt), (req), (msg))
+#define svc_reply(xprt, req, msg) \
+    (*(xprt)->xp_ops->xp_reply) ((xprt), (req), (msg))
 
 #define SVC_FREEARGS(xprt, xargs, argsp)                        \
     (*(xprt)->xp_ops->xp_freeargs)((xprt), (xargs), (argsp))

@@ -93,7 +93,7 @@ static bool svc_vc_recv(SVCXPRT *, struct rpc_msg *);
 static bool svc_vc_getargs(SVCXPRT *, xdrproc_t, void *);
 static bool svc_vc_getargs2(SVCXPRT *, xdrproc_t, void *, void *);
 static bool svc_vc_freeargs(SVCXPRT *, xdrproc_t, void *);
-static bool svc_vc_reply(SVCXPRT *, struct rpc_msg *);
+static bool svc_vc_reply(SVCXPRT *, struct svc_req *req, struct rpc_msg *);
 static void svc_vc_rendezvous_ops(SVCXPRT *);
 static void svc_vc_ops(SVCXPRT *);
 static void svc_vc_override_ops(SVCXPRT *xprt, SVCXPRT *newxprt);
@@ -1131,13 +1131,14 @@ svc_vc_freeargs(SVCXPRT *xprt, xdrproc_t xdr_args, void *args_ptr)
 }
 
 static bool
-svc_vc_reply(SVCXPRT *xprt, struct rpc_msg *msg)
+svc_vc_reply(SVCXPRT *xprt, struct svc_req *req, struct rpc_msg *msg)
 {
     XDR *xdrs;
     struct cf_conn *cd;
     xdrproc_t xdr_results;
     caddr_t xdr_location;
     bool rstat, has_args;
+    SVCAUTH *auth;
 #if 0
     CLIENT *cl; /* XXX duplex */
     struct ct_data *ct;
@@ -1177,9 +1178,10 @@ svc_vc_reply(SVCXPRT *xprt, struct rpc_msg *msg)
         msg->rm_xid = cd->x_id;
 
     rstat = FALSE;
+    auth = (req->rq_auth) ? req->rq_auth : xprt->xp_auth;
     if (xdr_replymsg(xdrs, msg) &&
-        (!has_args || (xprt->xp_auth &&
-                       SVCAUTH_WRAP(xprt->xp_auth, xdrs, xdr_results,
+        (!has_args || (auth &&
+                       SVCAUTH_WRAP(auth, xdrs, xdr_results,
                                     xdr_location)))) {
         rstat = TRUE;
     }

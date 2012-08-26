@@ -568,7 +568,7 @@ svc_sendreply(SVCXPRT *xprt, struct svc_req *req, xdrproc_t xdr_results,
     rply.acpted_rply.ar_stat = SUCCESS;
     rply.acpted_rply.ar_results.where = xdr_location;
     rply.acpted_rply.ar_results.proc = xdr_results;
-    return (SVC_REPLY (xprt, &rply));
+    return (SVC_REPLY (xprt, req, &rply));
 }
 
 /*
@@ -587,7 +587,7 @@ svcerr_noproc(SVCXPRT *xprt, struct svc_req *req)
     rply.rm_xid = req->rq_xid;
     rply.acpted_rply.ar_verf = req->rq_verf;
     rply.acpted_rply.ar_stat = PROC_UNAVAIL;
-    SVC_REPLY (xprt, &rply);
+    SVC_REPLY (xprt, req, &rply);
 }
 
 /*
@@ -606,7 +606,7 @@ svcerr_decode(SVCXPRT *xprt, struct svc_req *req)
     rply.rm_xid = req->rq_xid;
     rply.acpted_rply.ar_verf = req->rq_verf;
     rply.acpted_rply.ar_stat = GARBAGE_ARGS;
-    SVC_REPLY (xprt, &rply);
+    SVC_REPLY (xprt, req, &rply);
 }
 
 /*
@@ -625,7 +625,7 @@ svcerr_systemerr(SVCXPRT *xprt, struct svc_req *req)
     rply.rm_xid = req->rq_xid;
     rply.acpted_rply.ar_verf = req->rq_verf;
     rply.acpted_rply.ar_stat = SYSTEM_ERR;
-    SVC_REPLY (xprt, &rply);
+    SVC_REPLY (xprt, req, &rply);
 }
 
 #if 0
@@ -686,7 +686,7 @@ svcerr_auth(SVCXPRT *xprt, struct svc_req *req, enum auth_stat why)
     rply.rm_xid = req->rq_xid;
     rply.rjcted_rply.rj_stat = AUTH_ERROR;
     rply.rjcted_rply.rj_why = why;
-    SVC_REPLY (xprt, &rply);
+    SVC_REPLY (xprt, req, &rply);
 }
 
 /*
@@ -716,7 +716,7 @@ svcerr_noprog(SVCXPRT *xprt, struct svc_req *req)
     rply.rm_xid = req->rq_xid;
     rply.acpted_rply.ar_verf = req->rq_verf;
     rply.acpted_rply.ar_stat = PROG_UNAVAIL;
-    SVC_REPLY (xprt, &rply);
+    SVC_REPLY (xprt, req, &rply);
 }
 
 /*
@@ -738,7 +738,7 @@ svcerr_progvers(SVCXPRT *xprt, struct svc_req *req, rpcvers_t low_vers,
     rply.acpted_rply.ar_stat = PROG_MISMATCH;
     rply.acpted_rply.ar_vers.low = (u_int32_t) low_vers;
     rply.acpted_rply.ar_vers.high = (u_int32_t) high_vers;
-    SVC_REPLY (xprt, &rply);
+    SVC_REPLY (xprt, req, &rply);
 }
 
 /* ******************* SERVER INPUT STUFF ******************* */

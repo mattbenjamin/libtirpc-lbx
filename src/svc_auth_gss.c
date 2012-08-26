@@ -352,12 +352,11 @@ _svcauth_gss(struct svc_req *req, struct rpc_msg *msg, bool *no_dispatch)
 {
     XDR xdrs[1];
     SVCAUTH *auth;
-    SVCXPRT *xprt = req->rq_xprt;
     struct svc_rpc_gss_data *gd = NULL;
     struct rpc_gss_cred *gc = NULL;
     struct rpc_gss_init_res gr;
     int call_stat, offset;
-    OM_uint32 maj_stat, min_stat;
+    OM_uint32 min_stat;
     bool gd_locked = FALSE;
     bool gd_hashed = FALSE;
 
@@ -568,8 +567,6 @@ svcauth_gss_wrap(SVCAUTH *auth, XDR *xdrs, xdrproc_t xdr_func, caddr_t xdr_ptr)
 {
     struct svc_rpc_gss_data *gd;
 
-    log_debug("in svcauth_gss_wrap()");
-
     gd = SVCAUTH_PRIVATE(auth);
 
     if (!gd->established || gd->sec.svc == RPCSEC_GSS_SVC_NONE) {
@@ -585,8 +582,6 @@ svcauth_gss_unwrap(SVCAUTH *auth, XDR *xdrs, xdrproc_t xdr_func,
                    caddr_t xdr_ptr)
 {
     struct svc_rpc_gss_data *gd;
-
-    log_debug("in svcauth_gss_unwrap()");
 
     gd = SVCAUTH_PRIVATE(auth);
 
