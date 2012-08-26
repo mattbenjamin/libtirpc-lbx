@@ -177,7 +177,7 @@ authgss_ctx_hash_set(struct svc_rpc_gss_data *gd)
 
     cond_init_authgss_hash();
 
-    t = rbtx_partition_of_scalar(&authgss_hash_st.xt, gd->k);
+    t = rbtx_partition_of_scalar(&authgss_hash_st.xt, gd->hk.k);
     spin_lock(&t->sp);
     rslt = rbtree_x_cached_insert(&authgss_hash_st.xt, t, &gd->node_k,
                                   gd->hk.k);
