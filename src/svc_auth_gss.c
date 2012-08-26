@@ -430,6 +430,8 @@ _svcauth_gss(struct svc_req *req, struct rpc_msg *msg, bool *no_dispatch)
     mutex_lock(&gd->lock);
     gd_locked = TRUE;
 
+    req->rq_auth = auth;
+
     /* Check sequence number. */
     if (gd->established) {
         if (gc->gc_seq > MAXSEQ)
