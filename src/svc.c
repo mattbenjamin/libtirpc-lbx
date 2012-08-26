@@ -150,6 +150,8 @@ svc_init(svc_init_params * params)
         __svc_params->gss.ctx_hash_partitions = params->gss_ctx_hash_partitions;
     if (params->gss_max_idle_gen)
         __svc_params->gss.max_idle_gen = params->gss_max_idle_gen;
+    if (params->gss_max_gc)
+        __svc_params->gss.max_gc = params->gss_max_gc;
 
     __svc_params->initialized = TRUE;
 

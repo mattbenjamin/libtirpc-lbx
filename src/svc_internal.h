@@ -57,6 +57,7 @@ struct svc_params
     struct {
         int ctx_hash_partitions;
         int max_idle_gen;
+        int max_gc;
     } gss;
 
     struct __svc_ops {

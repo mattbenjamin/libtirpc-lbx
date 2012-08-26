@@ -205,3 +205,37 @@ authgss_ctx_hash_del(struct svc_rpc_gss_data *gd)
 
     return (TRUE);
 }
+
+void
+authgss_ctx_gc_idle(void)
+{
+    struct rbtree_x_part *t;
+    struct authgss_x_part *axp;
+    struct svc_rpc_gss_data *gd;
+    int ix, cnt;
+
+    cond_init_authgss_hash();
+
+    for (ix = 0; ix < authgss_hash_st.xt.npart; ++ix) {
+        axp = (struct authgss_x_part *) t->u1;
+        cnt = 0;
+        spin_lock(&t->sp);
+    again:
+        gd = TAILQ_FIRST(&axp->lru_q);
+        if (! gd)
+            goto next_t;
+        if (abs(axp->gen - gd->gen) > __svc_params->gss.max_idle_gen) {
+            /* entry at LRU will eventually have no refs */
+            if (gd->refcnt == 0) {
+                rbtree_x_cached_remove(&authgss_hash_st.xt, t,  &gd->node_k,
+                                       gd->hk.k);
+                TAILQ_REMOVE(&axp->lru_q, gd, lru_q);
+                free_svc_rpc_gss_data(gd);
+            }
+            if (cnt++ <  __svc_params->gss.max_gc)
+                goto again;
+        }
+    next_t:
+        spin_unlock(&t->sp);
+    }
+}

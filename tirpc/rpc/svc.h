@@ -129,6 +129,7 @@ typedef struct svc_init_params
     u_int max_events;      /* evchan events */
     u_int gss_ctx_hash_partitions;
     u_int gss_max_idle_gen;
+    u_int gss_max_gc;
     warnx_t warnx;
 } svc_init_params;
 
