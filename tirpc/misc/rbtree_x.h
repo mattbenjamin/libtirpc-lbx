@@ -53,8 +53,7 @@ extern int rbtx_init(struct rbtree_x *xt, opr_rbtree_cmpf_t cmpf,
 
 static inline struct opr_rbtree_node *
 rbtree_x_cached_lookup(struct rbtree_x *xt, struct rbtree_x_part *t,
-                       struct opr_rbtree_node *nk, uint64_t hk,
-                       uint32_t flags)
+                       struct opr_rbtree_node *nk, uint64_t hk)
 {
     struct opr_rbtree_node *nv_cached, *nv = NULL;
     uint32_t offset;

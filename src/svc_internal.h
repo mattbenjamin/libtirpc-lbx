@@ -26,6 +26,8 @@
 #ifndef TIRPC_SVC_INTERNAL_H
 #define TIRPC_SVC_INTERNAL_H
 
+#include <sys/epoll.h>
+
 /* threading fdsets around is annoying */
 struct svc_params
 {

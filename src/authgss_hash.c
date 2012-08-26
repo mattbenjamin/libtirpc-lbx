@@ -30,7 +30,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <rpc/rpc.h>
+#include <rpc/types.h>
 #include "rpc_com.h"
+#include <intrinsic.h>
 #include "gss_internal.h"
 #include "svc_internal.h"
 
@@ -40,9 +42,9 @@ struct authgss_x_part
 {
     uint64_t gen;
     TAILQ_HEAD(ctx_tailq, svc_rpc_gss_data) lru_q;
-}
+};
 
-static struct authgss_hash_st
+struct authgss_hash_st
 {
     mutex_t lock;
     struct rbtree_x xt;
@@ -54,10 +56,36 @@ static struct authgss_hash_st authgss_hash_st =
     PTHREAD_MUTEX_INITIALIZER, /* lock */
     {
         0, /* npart */
+        RBT_X_FLAG_NONE, /* flags */
         255, /* cachesz */
         NULL /* tree */
     }, /* xt */
     FALSE /* initialized */
+};
+
+static inline uint64_t
+gss_ctx_hash(gss_union_ctx_id_desc *gss_ctx)
+{
+    return ((uint64_t) gss_ctx->mech_type +
+            (uint64_t) gss_ctx->internal_ctx_id);
+}
+
+static int
+svc_rpc_gss_cmpf(const struct opr_rbtree_node *lhs,
+                 const struct opr_rbtree_node *rhs)
+{
+    struct svc_rpc_gss_data *lk, *rk;
+
+    lk = opr_containerof(lhs, struct svc_rpc_gss_data, node_k);
+    rk = opr_containerof(rhs, struct svc_rpc_gss_data, node_k);
+
+    if (lk->hk.k < rk->hk.k)
+        return (-1);
+
+    if (lk->hk.k == rk->hk.k)
+        return (0);
+
+    return (1);
 }
 
 void 
@@ -82,7 +110,7 @@ authgss_hash_init()
     for (ix = 0; ix < __svc_params->gss.ctx_hash_partitions; ++ix) {
         struct rbtree_x_part *xp = &(authgss_hash_st.xt.tree[ix]);
         struct authgss_x_part *axp;
-        xp->cache = mem_zalloc(authgss_hash_st.xt.cachesz,
+        xp->cache = mem_zalloc(authgss_hash_st.xt.cachesz *
                                sizeof(struct opr_rbtree_node *));
         if (unlikely(! xp->cache)) {
             __warnx(TIRPC_DEBUG_FLAG_RPCSEC_GSS,
@@ -99,7 +127,7 @@ authgss_hash_init()
     authgss_hash_st.initialized = TRUE;
 
 unlock:
-    mutex_unlock(&svcauth_gss_gs.lock);
+    mutex_unlock(&authgss_hash_st.lock);
 }
 
 #define cond_init_authgss_hash() { \
@@ -108,31 +136,6 @@ unlock:
                 authgss_hash_init(); \
         } while (0); \
     }
-
-static inline uint64_t
-gss_ctx_hash(gss_union_ctx_id_desc *gss_ctx)
-{
-    return ((uint64_t) gss_ctx->mech_type +
-            (uint64_t) gss_ctx->internal_ctx_id);
-}
-
-static uint64_t
-svc_rpc_gss_cmpf(const struct opr_rbtree_node *lhs,
-                 const struct opr_rbtree_node *rhs)
-{
-    struct svc_rpc_gss_data *lk, *rk;
-
-    lk = opr_containerof(lhs, struct svc_rpc_gss_data, node_k);
-    rk = opr_containerof(rhs, struct svc_rpc_gss_data, node_k);
-
-    if (lk->hk.k < rk->hk.k)
-        return (-1);
-
-    if (lk->hk.k == rk->hk.k)
-        return (0);
-
-    return (1);
-}
 
 struct svc_rpc_gss_data *
 authgss_ctx_hash_get(struct rpc_gss_cred *gc)
@@ -148,7 +151,7 @@ authgss_ctx_hash_get(struct rpc_gss_cred *gc)
     gss_ctx = (gss_union_ctx_id_desc *) (gc->gc_ctx.value);
     gk.hk.k = gss_ctx_hash(gss_ctx);
 
-    t = rbtx_partition_of_scalar(&authgss_hash_st.xt, gk.k);
+    t = rbtx_partition_of_scalar(&authgss_hash_st.xt, gk.hk.k);
     spin_lock(&t->sp);
     ngd = rbtree_x_cached_lookup(&authgss_hash_st.xt, t, &gk.node_k, gk.hk.k);
     if (ngd) {
@@ -196,7 +199,7 @@ authgss_ctx_hash_del(struct svc_rpc_gss_data *gd)
 
     cond_init_authgss_hash();
 
-    t = rbtx_partition_of_scalar(&authgss_hash_st.xt, gd->k);
+    t = rbtx_partition_of_scalar(&authgss_hash_st.xt, gd->hk.k);
     spin_lock(&t->sp);
     rbtree_x_cached_remove(&authgss_hash_st.xt, t,  &gd->node_k, gd->hk.k);
     axp = (struct authgss_x_part *) t->u1;
