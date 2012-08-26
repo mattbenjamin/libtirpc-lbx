@@ -54,6 +54,11 @@ struct svc_params
         } vc;
     } xprt_u;
 
+    struct {
+        int ctx_hash_partitions;
+        int max_idle_gen;
+    } gss;
+
     struct __svc_ops {
         bool (*svc_clean_idle)(fd_set *fds, int timeout, bool cleanblock);
         void (*svc_run)(void);
@@ -69,9 +74,12 @@ extern struct svc_params __svc_params[1];
     do { \
         if (! __svc_params->initialized) { \
             svc_init(&(svc_init_params) \
-                     { .flags = SVC_INIT_EPOLL, \
-                       .max_connections = 8192, \
-                       .max_events = 512}); \
+                     {       .flags = SVC_INIT_EPOLL, \
+                             .max_connections = 8192, \
+                             .max_events = 512, \
+                             .gss_ctx_hash_partitions = 13, \
+                             .gss_max_idle_gen = 1024 \
+                             }); \
         } \
     } while (0);
 

@@ -32,9 +32,7 @@
 #include <rpc/rpc.h>
 #include "rpc_com.h"
 #include "gss_internal.h"
-
-#define AUTHGSS_HASH_PARTIITONS 13
-#define MAX_DELTA_G 1024
+#include "svc_internal.h"
 
 /* GSS context cache */
 
@@ -73,14 +71,15 @@ authgss_hash_init()
     if (authgss_hash_st.initialized)
         goto unlock;
 
-    code = rbtx_init(&authgss_hash_st.xt, svc_rpc_gss_cmpf /* NULL (inline) */,
-                     AUTHGSS_HASH_PARTITIONS, RBT_X_FLAG_ALLOC);
+    code = rbtx_init(&authgss_hash_st.xt, svc_rpc_gss_cmpf,
+                     __svc_params->gss.ctx_hash_partitions,
+                     RBT_X_FLAG_ALLOC);
     if (code)
         __warnx(TIRPC_DEBUG_FLAG_RPCSEC_GSS,
                 "%s: rbtx_init failed", __func__);
 
     /* init read-through cache */
-    for (ix = 0; ix < AUTHGSS_HASH_PARTITIONS; ++ix) {
+    for (ix = 0; ix < __svc_params->gss.ctx_hash_partitions; ++ix) {
         struct rbtree_x_part *xp = &(authgss_hash_st.xt.tree[ix]);
         struct authgss_x_part *axp;
         xp->cache = mem_zalloc(authgss_hash_st.xt.cachesz,

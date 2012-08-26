@@ -127,6 +127,8 @@ typedef struct svc_init_params
     u_long flags;
     u_int max_connections; /* xprts */
     u_int max_events;      /* evchan events */
+    u_int gss_ctx_hash_partitions;
+    u_int gss_max_idle_gen;
     warnx_t warnx;
 } svc_init_params;
 

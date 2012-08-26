@@ -146,6 +146,11 @@ svc_init(svc_init_params * params)
     if (params->flags & SVC_INIT_NOREG_XPRTS)
         __svc_params->flags |= SVC_FLAG_NOREG_XPRTS;
 
+    if (params->gss_ctx_hash_partitions)
+        __svc_params->gss.ctx_hash_partitions = params->gss_ctx_hash_partitions;
+    if (params->gss_max_idle_gen)
+        __svc_params->gss.max_idle_gen = params->gss_max_idle_gen;
+
     __svc_params->initialized = TRUE;
 
     mutex_unlock(&__svc_params->mtx);
