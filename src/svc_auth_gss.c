@@ -40,7 +40,7 @@
 #include <string.h>
 #include <rpc/rpc.h>
 #include "rpc_com.h"
-#include "gss_internal.h"
+#include <rpc/gss_internal.h>
 
 static bool svcauth_gss_wrap(SVCAUTH *auth, XDR *xdrs, xdrproc_t xdr_func,
                                caddr_t xdr_ptr);

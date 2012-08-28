@@ -704,7 +704,7 @@ svcerr_weakauth(SVCXPRT *xprt, struct svc_req *req)
 {
     assert(xprt != NULL);
 
-    svcerr_auth2(xprt, req, AUTH_TOOWEAK);
+    svcerr_auth(xprt, req, AUTH_TOOWEAK);
 }
 
 /*
@@ -863,7 +863,7 @@ svc_dispatch_default(SVCXPRT *xprt, struct rpc_msg **ind_msg)
     /* first authenticate the message */
     if ((why = _authenticate (&r, msg)) != AUTH_OK)
     {
-        svcerr_auth2(xprt, &r, why);
+        svcerr_auth(xprt, &r, why);
         return;
     }
 
@@ -875,9 +875,9 @@ svc_dispatch_default(SVCXPRT *xprt, struct rpc_msg **ind_msg)
         (*svc_rec->sc_dispatch) (&r, xprt);
         return;
     case SVC_LKP_VERS_NOTFOUND:
-        svcerr_progvers2(xprt, &r, vrange.lowvers, vrange.highvers);
+        svcerr_progvers(xprt, &r, vrange.lowvers, vrange.highvers);
     default:
-        svcerr_noprog2(xprt, &r);
+        svcerr_noprog(xprt, &r);
         break;
     }
 }
@@ -913,7 +913,7 @@ svc_getreq_default(SVCXPRT *xprt)
 
             /* first authenticate the message */
             if ((why = _authenticate (&r, &msg)) != AUTH_OK) {
-                svcerr_auth2(xprt, &r, why);
+                svcerr_auth(xprt, &r, why);
                 goto call_done;
             }
 
@@ -927,11 +927,11 @@ svc_getreq_default(SVCXPRT *xprt)
             case SVC_LKP_VERS_NOTFOUND:
                 __warnx(TIRPC_DEBUG_FLAG_SVC,
                         "%s: dispatch prog vers notfound\n", __func__);
-                svcerr_progvers2(xprt, &r, vrange.lowvers, vrange.highvers);
+                svcerr_progvers(xprt, &r, vrange.lowvers, vrange.highvers);
             default:
                 __warnx(TIRPC_DEBUG_FLAG_SVC,
                         "%s: dispatch prog notfound\n", __func__);
-                svcerr_noprog2(xprt, &r);
+                svcerr_noprog(xprt, &r);
                 break;
             }
         } /* SVC_RECV again? */

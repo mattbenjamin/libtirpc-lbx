@@ -53,7 +53,7 @@
 #include <misc/opr_queue.h>
 #include "clnt_internal.h"
 #include "svc_internal.h"
-#include "gss_internal.h"
+#include <rpc/gss_internal.h>
 #include <rpc/svc_rqst.h>
 #include "svc_xprt.h"
 

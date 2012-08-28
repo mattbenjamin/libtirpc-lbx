@@ -34,7 +34,7 @@
 #include "rpc_com.h"
 #include <intrinsic.h>
 #include <misc/abstract_atomic.h>
-#include "gss_internal.h"
+#include <rpc/gss_internal.h>
 #include "svc_internal.h"
 
 /* GSS context cache */

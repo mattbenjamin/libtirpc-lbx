@@ -55,11 +55,11 @@ typedef struct SVCAUTH {
     caddr_t svc_ah_private;
 } SVCAUTH;
 
-#define SVCAUTH_WRAP(auth, xdrs, xfunc, xwhere)                         \
+#define SVCAUTH_WRAP(auth, xdrs, xfunc, xwhere) \
     ((*((auth)->svc_ah_ops->svc_ah_wrap))(auth, xdrs, xfunc, xwhere))
-#define SVCAUTH_UNWRAP(auth, xdrs, xfunc, xwhere)                       \
+#define SVCAUTH_UNWRAP(auth, xdrs, xfunc, xwhere) \
     ((*((auth)->svc_ah_ops->svc_ah_unwrap))(auth, xdrs, xfunc, xwhere))
-#define SVCAUTH_DESTROY(auth)                           \
+#define SVCAUTH_DESTROY(auth) \
     ((*((auth)->svc_ah_ops->svc_ah_destroy))(auth))
 
 /*

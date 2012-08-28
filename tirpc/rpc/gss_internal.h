@@ -36,6 +36,7 @@
 #include <rpc/rpc.h>
 #include <misc/rbtree_x.h>
 #include <misc/queue.h>
+#include <misc/abstract_atomic.h>
 
 #ifdef HAVE_HEIMDAL
 #include <gssapi.h>
@@ -48,6 +49,9 @@
 
 extern SVCAUTH svc_auth_none;
 
+#define SVCAUTH_PRIVATE(auth) \
+    ((struct svc_rpc_gss_data *)(auth)->svc_ah_private)
+
 /*
  * from mit-krb5-1.2.1 mechglue/mglueP.h:
  * Array of context IDs typed by mechanism OID
@@ -59,7 +63,7 @@ typedef struct gss_union_ctx_id_t
 } gss_union_ctx_id_desc, *gss_union_ctx_id_t;
 
 
-#define _MSPAC_SUPPORT 1
+#ifdef _MSPAC_SUPPORT
 
 #define URN_MSPAC "urn:mspac:"
 
@@ -67,7 +71,9 @@ struct mspac_buf
 {
     size_t length;
     uint8_t *data; /* krb5_octet */
-};    struct rbtree_x xt;
+};
+
+#endif /* _MSPAC_SUPPORT */
 
 struct svc_rpc_gss_data
 {
@@ -122,5 +128,7 @@ void authgss_hash_init();
 struct svc_rpc_gss_data * authgss_ctx_hash_get(struct rpc_gss_cred *gc);
 bool authgss_ctx_hash_set(struct svc_rpc_gss_data *gd);
 bool authgss_ctx_hash_del(struct svc_rpc_gss_data *gd);
+
+bool svcauth_gss_set_svc_name(gss_name_t name);
 
 #endif /* GSS_INTERNAL_H */
