@@ -33,6 +33,7 @@
 #include <rpc/types.h>
 #include "rpc_com.h"
 #include <intrinsic.h>
+#include <misc/abstract_atomic.h>
 #include "gss_internal.h"
 #include "svc_internal.h"
 
@@ -161,9 +162,10 @@ authgss_ctx_hash_get(struct rpc_gss_cred *gc)
         TAILQ_REMOVE(&axp->lru_q, gd, lru_q);
         TAILQ_INSERT_TAIL(&axp->lru_q, gd, lru_q);
         ++(axp->gen);
-        ++(gd->gen);
+        (void) atomic_inc_uint32_t(&gd->refcnt);
     }
     spin_unlock(&t->sp);
+    (void) atomic_inc_uint32_t(&gd->gen);
 
     return (gd);
 }
@@ -177,6 +179,7 @@ authgss_ctx_hash_set(struct svc_rpc_gss_data *gd)
 
     cond_init_authgss_hash();
 
+    ++(gd->refcnt); /* locked */
     t = rbtx_partition_of_scalar(&authgss_hash_st.xt, gd->hk.k);
     spin_lock(&t->sp);
     rslt = rbtree_x_cached_insert(&authgss_hash_st.xt, t, &gd->node_k,
@@ -206,6 +209,9 @@ authgss_ctx_hash_del(struct svc_rpc_gss_data *gd)
     TAILQ_REMOVE(&axp->lru_q, gd, lru_q);
     spin_unlock(&t->sp);
 
+    /* release gd */
+    unref_svc_rpc_gss_data(gd);
+
     return (TRUE);
 }
 
@@ -230,10 +236,12 @@ authgss_ctx_gc_idle(void)
         if (abs(axp->gen - gd->gen) > __svc_params->gss.max_idle_gen) {
             /* entry at LRU will eventually have no refs */
             if (gd->refcnt == 0) {
-                rbtree_x_cached_remove(&authgss_hash_st.xt, t,  &gd->node_k,
+                rbtree_x_cached_remove(&authgss_hash_st.xt, t, &gd->node_k,
                                        gd->hk.k);
                 TAILQ_REMOVE(&axp->lru_q, gd, lru_q);
-                free_svc_rpc_gss_data(gd);
+                spin_unlock(&t->sp);
+                unref_svc_rpc_gss_data(gd);
+                spin_lock(&t->sp);
             }
             if (cnt++ <  __svc_params->gss.max_gc)
                 goto again;

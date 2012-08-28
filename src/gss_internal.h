@@ -107,9 +107,15 @@ alloc_svc_rpc_gss_data(void)
 }
 
 static inline void
-free_svc_rpc_gss_data(struct svc_rpc_gss_data *gd)
+unref_svc_rpc_gss_data(struct svc_rpc_gss_data *gd)
 {
-    svcauth_gss_destroy(gd->auth);
+    u_int refcnt;
+
+    refcnt = atomic_dec_uint32_t(&gd->refcnt);
+
+    /* if refcnt is 0, gd is not reachable */
+    if (refcnt == 0)
+        svcauth_gss_destroy(gd->auth);
 }
 
 void authgss_hash_init();

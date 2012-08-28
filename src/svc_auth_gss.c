@@ -522,14 +522,7 @@ _svcauth_gss(struct svc_req *req, struct rpc_msg *msg, bool *no_dispatch)
                                 (xdrproc_t) xdr_void,
                                 (caddr_t) NULL);
 
-#ifdef _MSPAC_SUPPORT
-      if (gd->pac.data) {
-          mem_free(gd->pac.data, 0);
-          gd->pac.data = NULL;
-      }
-#endif
-      (void) authgss_ctx_hash_del(gd);
-      SVCAUTH_DESTROY(req->rq_auth); /* XXX disposes gd */
+      (void) authgss_ctx_hash_del(gd); /* unrefs, can destroy gd */
       req->rq_auth = &svc_auth_none;
 
       break;
