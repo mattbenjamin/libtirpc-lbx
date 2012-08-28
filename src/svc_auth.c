@@ -160,6 +160,7 @@ svc_auth_reg(int cred_flavor,
     case AUTH_NULL:
     case AUTH_SYS:
     case AUTH_SHORT:
+    case RPCSEC_GSS:
 #ifdef DES_BUILTIN
     case AUTH_DES:
 #endif
