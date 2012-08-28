@@ -92,7 +92,10 @@ struct svc_rpc_gss_data
 #ifdef _MSPAC_SUPPORT
     struct mspac_buf pac;
 #endif
+    SVCAUTH *auth;
 };
+
+bool svcauth_gss_destroy(SVCAUTH *auth);
 
 static inline struct svc_rpc_gss_data *
 alloc_svc_rpc_gss_data(void)
@@ -106,8 +109,7 @@ alloc_svc_rpc_gss_data(void)
 static inline void
 free_svc_rpc_gss_data(struct svc_rpc_gss_data *gd)
 {
-    mutex_destroy(&gd->lock);
-    mem_free(gd, 0);
+    svcauth_gss_destroy(gd->auth);
 }
 
 void authgss_hash_init();

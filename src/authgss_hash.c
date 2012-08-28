@@ -182,7 +182,7 @@ authgss_ctx_hash_set(struct svc_rpc_gss_data *gd)
     rslt = rbtree_x_cached_insert(&authgss_hash_st.xt, t, &gd->node_k,
                                   gd->hk.k);
     if (rslt) {
-        /* lru adjust */
+        /* lru */
         axp = (struct authgss_x_part *) t->u1;
         TAILQ_INSERT_TAIL(&axp->lru_q, gd, lru_q);
     }

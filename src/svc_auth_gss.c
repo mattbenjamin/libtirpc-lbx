@@ -42,7 +42,6 @@
 #include "rpc_com.h"
 #include "gss_internal.h"
 
-static bool svcauth_gss_destroy(SVCAUTH *auth);
 static bool svcauth_gss_wrap(SVCAUTH *auth, XDR *xdrs, xdrproc_t xdr_func,
                                caddr_t xdr_ptr);
 static bool svcauth_gss_unwrap(SVCAUTH *auth, XDR *xdrs, xdrproc_t xdr_func,
@@ -424,6 +423,7 @@ _svcauth_gss(struct svc_req *req, struct rpc_msg *msg, bool *no_dispatch)
         }
         auth->svc_ah_ops = &svc_auth_gss_ops;
         auth->svc_ah_private = (caddr_t) gd;
+        gd->auth = auth;
     }
 
     /* Serialize context. */
@@ -558,7 +558,15 @@ svcauth_gss_destroy(SVCAUTH *auth)
     if (gd->client_name)
         gss_release_name(&min_stat, &gd->client_name);
 
-    mem_free(gd, sizeof(*gd));
+#ifdef _MSPAC_SUPPORT
+      if (gd->pac.data)
+          mem_free(gd->pac.data, 0);
+#endif
+    gss_release_buffer(&min_stat, &gd->checksum);
+
+    mutex_destroy(&gd->lock);
+
+    mem_free(gd, sizeof(struct svc_rpc_gss_data));
     mem_free(auth, sizeof(*auth));
 
     return (TRUE);
