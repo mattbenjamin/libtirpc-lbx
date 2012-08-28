@@ -406,6 +406,8 @@ struct rpc_msg;
 enum auth_stat _svcauth_none (struct svc_req *, struct rpc_msg *);
 enum auth_stat _svcauth_short (struct svc_req *, struct rpc_msg *);
 enum auth_stat _svcauth_unix (struct svc_req *, struct rpc_msg *);
+enum auth_stat _svcauth_gss(struct svc_req *req, struct rpc_msg *msg,
+                            bool *no_dispatch);
 __END_DECLS
 
 #define AUTH_NONE 0  /* no authentication */

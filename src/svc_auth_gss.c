@@ -138,8 +138,6 @@ svcauth_gss_release_cred(void)
     return (TRUE);
 }
 
-/* XXXX: clean to here */
-
 static bool
 svcauth_gss_accept_sec_context(struct svc_req *req,
                                struct svc_rpc_gss_data *gd,

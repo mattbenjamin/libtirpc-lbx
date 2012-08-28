@@ -81,11 +81,11 @@ static struct authsvc *Auths = NULL;
  * There is an assumption that any flavour less than AUTH_NULL is invalid.
  */
 enum auth_stat
-_authenticate(struct svc_req *req, struct rpc_msg *msg)
+svc_auth_authenticate(struct svc_req *req, struct rpc_msg *msg)
 {
     int cred_flavor;
     struct authsvc *asp;
-    enum auth_stat dummy;
+    enum auth_stat rslt;
     extern mutex_t authsvc_lock;
 
 /* VARIABLES PROTECTED BY authsvc_lock: asp, Auths */
@@ -95,19 +95,26 @@ _authenticate(struct svc_req *req, struct rpc_msg *msg)
     req->rq_verf.oa_length = 0;
     cred_flavor = req->rq_cred.oa_flavor;
     switch (cred_flavor) {
+    case RPCSEC_GSS:
+        {
+            bool no_dispatch;
+            rslt = _svcauth_gss(req, msg, &no_dispatch);
+        }
+    return (rslt);
     case AUTH_NONE:
-        dummy = _svcauth_none(req, msg);
-        return (dummy);
+        rslt = _svcauth_none(req, msg);
+        return (rslt);
+        break;
     case AUTH_SYS:
-        dummy = _svcauth_unix(req, msg);
-        return (dummy);
+        rslt = _svcauth_unix(req, msg);
+        return (rslt);
     case AUTH_SHORT:
-        dummy = _svcauth_short(req, msg);
-        return (dummy);
+        rslt = _svcauth_short(req, msg);
+        return (rslt);
 #ifdef DES_BUILTIN
     case AUTH_DES:
-        dummy = _svcauth_des(req, msg);
-        return (dummy);
+        rslt = _svcauth_des(req, msg);
+        return (rslt);
 #endif
     default:
         break;
