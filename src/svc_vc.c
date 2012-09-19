@@ -793,9 +793,12 @@ svc_vc_rendezvous_control(SVCXPRT *xprt, const u_int rq, void *in)
 }
 
 static inline void
-cfconn_set_dead(struct cf_conn *cd)
+cfconn_set_dead(SVCXPRT *xprt, struct cf_conn *cd)
 {
+    /* XXX different lock (eg, in cf_conn)? */
+    pthread_spin_lock(&xprt->xp_lock);
     cd->strm_stat = XPRT_DIED;
+    pthread_spin_unlock(&xprt->xp_lock);
 }
 
 /*
@@ -878,7 +881,7 @@ read_vc(void *xprtp, void *buf, int len)
     }
 
 fatal_err:
-    cfconn_set_dead(cd);
+    cfconn_set_dead(xprt, cd);
     return (-1);
 }
 
@@ -909,7 +912,7 @@ write_vc(void *xprtp, void *buf, int len)
                 __warnx(TIRPC_DEBUG_FLAG_SVC_VC,
                         "%s: short write !EAGAIN (will set dead)",
                         __func__);
-                cfconn_set_dead(cd);
+                cfconn_set_dead(xprt, cd);
                 return (-1);
             }
             if (cd->nonblock && i != cnt) {
@@ -925,7 +928,7 @@ write_vc(void *xprtp, void *buf, int len)
                     __warnx(TIRPC_DEBUG_FLAG_SVC_VC,
                             "%s: short write !EAGAIN (will set dead)",
                             __func__);
-                    cfconn_set_dead(cd);
+                    cfconn_set_dead(xprt, cd);
                     return (-1);
                 }
             }
@@ -983,7 +986,7 @@ readv_vc(void *xprtp, struct iovec *iov, int iovcnt, u_int flags)
     }
 
 fatal_err:
-    cfconn_set_dead(cd);
+    cfconn_set_dead(xprt, cd);
 out:
     return (nbytes);
 }
@@ -1009,7 +1012,7 @@ writev_vc(void *xprtp, struct iovec *iov, int iovcnt, u_int flags)
         __warnx(TIRPC_DEBUG_FLAG_SVC_VC,
                 "%s: short writev (will set dead)",
                 __func__);
-        cfconn_set_dead(cd);
+        cfconn_set_dead(xprt, cd);
         return (-1);
     }
 
@@ -1069,7 +1072,7 @@ svc_vc_recv(SVCXPRT *xprt, struct rpc_msg *msg)
     }
     __warnx(TIRPC_DEBUG_FLAG_SVC_VC,
             "%s: xdr_dplx_msg failed (will set dead)");
-    cfconn_set_dead(cd);
+    cfconn_set_dead(xprt, cd);
     return (FALSE);
 }
 
